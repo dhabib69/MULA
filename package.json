@@ -1,0 +1,23 @@
+{
+  "name": "mula-cashier",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "build": "pkg server.js --targets node18-win-x64 --output dist/MULA-Cashier.exe --compress GZip",
+    "deploy": "firebase deploy"
+
+  },
+  "pkg": {
+    "assets": [
+      "index.html",
+      "assets/**/*",
+      "MULAFINAL.png"
+    ],
+    "targets": ["node18-win-x64"]
+  },
+  "dependencies": {
+    "firebase-tools": "^15.15.0",
+    "jsdom": "^29.1.1"
+  }
+}

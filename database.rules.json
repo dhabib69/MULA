@@ -1,0 +1,32 @@
+{
+  "rules": {
+    "customMenu": {
+      ".read": true,
+      ".write": "auth != null && auth.token.firebase.sign_in_provider == 'password'"
+    },
+    "customMenuComps": {
+      ".read": true,
+      ".write": "auth != null && auth.token.firebase.sign_in_provider == 'password'"
+    },
+    "priceOverrides": {
+      ".read": true,
+      ".write": "auth != null && auth.token.firebase.sign_in_provider == 'password'"
+    },
+    "orders": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
+    "guestSessions": {
+      ".read": true,
+      ".write": "auth != null"
+    },
+    "receipts": {
+      ".read": true,
+      ".write": "auth != null && auth.token.firebase.sign_in_provider == 'password'"
+    },
+    "stock": {
+      ".read": true,
+      ".write": "auth != null && auth.token.firebase.sign_in_provider == 'password'"
+    }
+  }
+}

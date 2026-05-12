@@ -1,5 +1,5 @@
 if('serviceWorker' in navigator){
-  const swCode = `const CACHE = 'mula-v28';
+  const swCode = `const CACHE = 'mula-v29';
 const ASSETS = ['/', '/index.html', '/assets/css/mula.css', '/assets/js/01-platform.js', '/assets/js/02-menu-data.js', '/assets/js/03-app-state.js', '/assets/js/04-dashboard.js', '/assets/js/05-printing.js', '/assets/js/06-checkout.js', '/assets/js/07-guest-view.js', '/assets/js/mula-sw-register.js'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));

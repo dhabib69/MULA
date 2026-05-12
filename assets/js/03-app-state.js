@@ -279,7 +279,7 @@ document.getElementById('app').style.display='block';
 document.getElementById('roleBadge').textContent=r==='admin'?'Admin':'Karyawan';
 document.getElementById('roleBadge').className='role-badge '+r;
 document.getElementById('logoutBtn').style.display='block';
-document.getElementById('printBtn').style.display='block';document.getElementById('manageToggleBtn').style.display='flex';if(r==='admin'){document.getElementById('stockPanel').style.display='block';document.querySelectorAll('.admin-tab').forEach(el=>el.style.display='block');document.querySelectorAll('.admin-only').forEach(el=>el.style.display='flex');}
+document.getElementById('printBtn').style.display='block';if(r==='admin'){document.getElementById('manageToggleBtn').style.display='flex';document.getElementById('stockPanel').style.display='block';document.querySelectorAll('.admin-tab').forEach(el=>el.style.display='block');document.querySelectorAll('.admin-only').forEach(el=>el.style.display='flex');}
 document.getElementById('dateInput').value=curDate;
 document.getElementById('dateLabel').textContent=fmtDate(curDate);
 subAll();

@@ -64,8 +64,6 @@ class MainActivity : AppCompatActivity() {
             webChromeClient = WebChromeClient()
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
-            settings.useWideViewPort = true
-            settings.loadWithOverviewMode = true
             settings.cacheMode = WebSettings.LOAD_NO_CACHE
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             addJavascriptInterface(printerBridge, "MulaPrinter")
@@ -211,6 +209,6 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val PREF_URL = "cashier_url"
         private const val DEFAULT_URL = "https://mula-eatery.web.app/"
-        private const val APP_WEB_VERSION = 26
+        private const val APP_WEB_VERSION = 27
     }
 }

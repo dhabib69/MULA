@@ -147,6 +147,13 @@ const server = http.createServer((req, res) => {
   const filePath = path.join(root, rel);
   if (!filePath.startsWith(root)) return sendText(res, 403, "Forbidden");
   fs.readFile(filePath, (err, data) => {
+    if (err && req.method === "GET" && !path.extname(rel)) {
+      return fs.readFile(path.join(root, "index.html"), (fallbackErr, fallbackData) => {
+        if (fallbackErr) return sendText(res, 404, "Not found");
+        res.writeHead(200, { "Content-Type": fileType("index.html"), "Cache-Control": "no-store" });
+        res.end(fallbackData);
+      });
+    }
     if (err) return sendText(res, 404, "Not found");
     res.writeHead(200, { "Content-Type": fileType(filePath), "Cache-Control": "no-store" });
     res.end(data);

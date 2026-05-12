@@ -33,6 +33,11 @@
   .osm-method-row{display:flex;gap:6px;flex-wrap:wrap;}
   .osm-method-btn{background:var(--surface1);border:1px solid var(--border);color:var(--muted);padding:5px 12px;border-radius:20px;font-size:12px;cursor:pointer;font-family:'Outfit',sans-serif;transition:all 0.18s;}
   .osm-method-btn.active{background:rgba(212,168,83,0.15);border-color:var(--gold);color:var(--gold);font-weight:700;}
+  .osm-dest-box{padding:14px 20px 0;border-top:1px solid var(--border,#333);}
+  .osm-dest-label{font-size:11px;color:var(--muted2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.7px;}
+  .osm-dest-row{display:flex;gap:7px;overflow-x:auto;padding-bottom:3px;scrollbar-width:none;}
+  .osm-dest-btn{background:var(--surface3);border:1px solid var(--border2);color:var(--muted2);padding:7px 11px;border-radius:999px;font-size:12px;white-space:nowrap;cursor:pointer;font-family:Outfit,sans-serif;}
+  .osm-dest-btn.active{background:rgba(212,168,83,.16);border-color:var(--gold-dim);color:var(--gold);font-weight:700;}
   .osm-actions{display:flex;gap:10px;}
   .osm-actions .btn-primary{flex:2;padding:12px;font-size:15px;font-weight:700;}
   .osm-actions .btn-secondary{flex:1;padding:12px;font-size:15px;}
@@ -44,6 +49,13 @@
   modal.innerHTML=`<div class="osm-box">
     <div class="osm-head"><div><div class="osm-title">Ringkasan Order</div><div class="osm-subtitle">Konfirmasi sebelum kirim ke dapur</div></div></div>
     <div class="osm-body" id="osmItems"></div>
+    <div class="osm-dest-box">
+      <div class="osm-dest-label">Tujuan Order</div>
+      <div class="osm-dest-row" id="osmDestRow">
+        <button class="osm-dest-btn active" data-dest="takeaway">Takeaway</button>
+        ${TABLE_IDS.map(id=>`<button class="osm-dest-btn" data-dest="table-${id}">Meja ${id}</button>`).join('')}
+      </div>
+    </div>
     <div class="osm-foot">
       <div class="osm-total"><span class="osm-total-lbl">Total</span><span class="osm-total-val" id="osmTotal"></span></div>
       <div class="osm-pay-box">
@@ -112,8 +124,11 @@ document.getElementById('prosesManualBtn').addEventListener('click',()=>{
   document.querySelectorAll('.osm-method-btn').forEach(b=>b.classList.remove('active'));
   document.querySelector('.osm-method-btn[data-method="Tunai"]').classList.add('active');
   tunaiRow.style.display=''; kembaliRow.style.display=''; fastCash.style.display='';
+  document.querySelectorAll('.osm-dest-btn').forEach(b=>b.classList.remove('active'));
+  document.querySelector('.osm-dest-btn[data-dest="takeaway"]').classList.add('active');
   
   function getMethod(){return document.querySelector('.osm-method-btn.active')?.dataset.method||'Tunai';}
+  function getDestination(){const dest=document.querySelector('.osm-dest-btn.active')?.dataset.dest||'takeaway';if(dest.startsWith('table-')){const tableId=dest.split('-')[1];return{kind:'table',tableId,label:`Meja ${tableId}`};}return{kind:'takeaway',tableId:null,label:'Takeaway / Kasir'};}
   
   function calcKembali(){
     const t=parseInt(tunaiInp.value)||0;
@@ -124,10 +139,12 @@ document.getElementById('prosesManualBtn').addEventListener('click',()=>{
   tunaiInp.addEventListener('input',calcKembali);
   
   document.querySelectorAll('.osm-method-btn').forEach(btn=>{
-    btn.addEventListener('click',()=>{
+    const newMethodBtn=btn.cloneNode(true);
+    btn.parentNode.replaceChild(newMethodBtn,btn);
+    newMethodBtn.addEventListener('click',()=>{
       document.querySelectorAll('.osm-method-btn').forEach(b=>b.classList.remove('active'));
-      btn.classList.add('active');
-      const isTunai=btn.dataset.method==='Tunai';
+      newMethodBtn.classList.add('active');
+      const isTunai=newMethodBtn.dataset.method==='Tunai';
       tunaiRow.style.display=isTunai?'':'none';
       kembaliRow.style.display=isTunai?'':'none';
       fastCash.style.display=isTunai?'':'none';
@@ -145,6 +162,14 @@ document.getElementById('prosesManualBtn').addEventListener('click',()=>{
       calcKembali();
     });
   });
+  document.querySelectorAll('.osm-dest-btn').forEach(btn=>{
+    const newDestBtn=btn.cloneNode(true);
+    btn.parentNode.replaceChild(newDestBtn,btn);
+    newDestBtn.addEventListener('click',()=>{
+      document.querySelectorAll('.osm-dest-btn').forEach(b=>b.classList.remove('active'));
+      newDestBtn.classList.add('active');
+    });
+  });
 
   // Replace confirm handler
   const confirmBtn=document.getElementById('osmConfirm');
@@ -158,14 +183,20 @@ document.getElementById('prosesManualBtn').addEventListener('click',()=>{
     newBtn.disabled=true;
     newBtn.textContent='Memproses...';
     document.getElementById('orderSummaryModal').classList.remove('show');
-    const tid='KASIR-'+Date.now().toString().slice(-4);
+    const dest=getDestination();
+    const tid=(dest.kind==='table'?`MEJA-${dest.tableId}-`:'KASIR-')+Date.now().toString().slice(-4);
     const dbItems={};
     orderItems.forEach(i=>{const entry=normalizeOrderEntry(orders[i.id]);dbItems[i.id]={qty:entry.qty,note:entry.note,tanpaNasiQty:entry.tanpaNasiQty,tanpaNasi:entry.tanpaNasi};});
     try{
       const finRef=push(ref(db,`orders/${curDate}`));
       const finKey=finRef.key||finRef.path?.split('/').pop();
-      const fPayload={time:Date.now(),tableLabel:'Takeaway / Kasir',total,cashGiven,change,paymentMethod,items:dbItems};
-      const tPayload={status:'active',items:dbItems,total,cashGiven,change,paymentMethod,tableLabel:'Takeaway / Kasir',createdAt:Date.now(),dateKey:curDate,financeKey:finKey};
+      const createdAt=Date.now();
+      const fPayload={time:createdAt,tableLabel:dest.label,total,cashGiven,change,paymentMethod,items:dbItems,orderSource:dest.kind};
+      const tPayload={status:'active',items:dbItems,total,cashGiven,change,paymentMethod,tableLabel:dest.label,tableId:dest.tableId||null,orderSource:dest.kind,createdAt,kitchenQueuedAt:createdAt,dateKey:curDate,financeKey:finKey};
+      setLocalDailyOrder(curDate,finKey,fPayload);
+      setLocalActiveOrder(tid,tPayload);
+      dailyOrders=mergedDailyOrders(curDate,dailyOrders);
+      tableOrders=mergedActiveOrders(tableOrders);
       
       set(finRef,fPayload).catch(()=>{});
       set(ref(db,`tableOrders/${tid}`),tPayload).catch(()=>{});
@@ -174,8 +205,10 @@ document.getElementById('prosesManualBtn').addEventListener('click',()=>{
       q.push({type:'kasir',finKey,dateKey:curDate,tid,fPayload,tPayload});
       localStorage.setItem('mula_offline_queue',JSON.stringify(q));
       
-      try{await autoPrint(dbItems,total,'Takeaway / Kasir',cashGiven,change);}catch(e){}
+      try{await autoPrint(dbItems,total,dest.label,cashGiven,change);}catch(e){}
       orders={};renderOrders();
+      renderActiveTables();
+      if(document.getElementById('tab-keuangan').classList.contains('active'))renderKeuangan();
       showToast('Pesanan berhasil masuk ke dapur!');
     }catch(e){alert('Gagal: '+e.message);}
     newBtn.disabled=false;
@@ -197,7 +230,9 @@ document.getElementById('searchClear').addEventListener('click',function(){
 });
 document.getElementById('manageToggleBtn').addEventListener('click',function(){
   isManageMode=!isManageMode;
+  document.body.classList.toggle('manage-mode',isManageMode);
   renderOrders();
+  if(document.getElementById('tab-keuangan').classList.contains('active'))renderKeuangan();
 });
 function filterMenu(q){
   if(!q){

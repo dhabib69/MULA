@@ -31,7 +31,7 @@ function fbPush(r, v) { return v !== undefined ? r.push(v) : r.push(); }
 var DEMO_MODE = false;
 var db = fbDb;
 
-// ── Theme System ──────────────────────────────────────────────
+// Theme System
 
 (function(){
   const KEY='mula_theme';
@@ -75,17 +75,17 @@ var db = fbDb;
     const btn=document.createElement('button');
     btn.id='themeToggle';
     btn.title='Toggle dark/light';
-    btn.textContent=document.documentElement.classList.contains('light-mode')?'🌙':'☀️';
+    btn.textContent=document.documentElement.classList.contains('light-mode')?'Dark':'Light';
     btn.addEventListener('click',()=>{
       const isLight=document.documentElement.classList.toggle('light-mode');
       localStorage.setItem(KEY,isLight?'light':'dark');
-      btn.textContent=isLight?'🌙':'☀️';
+      btn.textContent=isLight?'Dark':'Light';
     });
     right.insertBefore(btn,right.firstChild);
   }
   document.readyState==='loading'?document.addEventListener('DOMContentLoaded',addBtn):addBtn();
 })();
-// ─────────────────────────────────────────────────────────────
+// Demo adapter and shared constants
 var demoWatchers=new Map();
 var demoPollT=null,demoPollBusy=false;
 function dClone(v){return v==null?v:JSON.parse(JSON.stringify(v));}
@@ -105,7 +105,15 @@ async function remove(r){if(!DEMO_MODE)return fbRemove(r);return dWrite('remove'
 function push(r,v){if(!DEMO_MODE)return fbPush(r,v);const key=`p_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;const child={path:`${dPath(r.path)}/${key}`,key};if(arguments.length>1)dWrite('set',child.path,v);return child;}
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 var PASS=ADMIN_PASS;
-var TABLE_IDS=['1','2','3','4','5','6','7'];
-var APP_URL=location.origin+location.pathname;
+var TABLE_IDS=['1','2','3','4','5','6','7','8','9'];
+var APP_URL=location.origin;
+function tableUrl(id){return `${location.origin}/table${id}`;}
+function getTableParamFromUrl(){
+  const params=new URLSearchParams(location.search);
+  const queryTable=params.get('table');
+  if(queryTable)return queryTable;
+  const match=location.pathname.match(/^\/table([1-9])\/?$/i);
+  return match?match[1]:null;
+}
 var NASI_PRICE=5000;
 var NASI_IDS=["beef_yakiniku","tongseng_sapi","ayam_kremes_lmg","ayam_kremes_ijo","ayam_geprek","ayam_bakar","lele_kremes_lmg","lele_kremes_ijo","nila_kremes_lmg","nila_kremes_ijo","soto_padang","udang_saus"];

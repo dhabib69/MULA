@@ -4,8 +4,33 @@ var unsubOrders=null,unsubStock=null,unsubReceipts=null,unsubCustom=null,unsubPr
 var curTable=null,tableOrders={},dailyOrders={},unsubTableOrder=null,unsubAllTables=null;
 var customReady=false,pricesReady=false,renderScheduled=false;
 var paymentAlertSeen=new Set();
+var kitchenAlertSeen=new Set(),kitchenTimerInterval=null,kitchenSoundEnabled=localStorage.getItem('mula_kitchen_sound')==='1';
+var LOCAL_DAILY_KEY='mula_local_daily_orders';
+var LOCAL_ACTIVE_KEY='mula_local_active_orders';
+var LOCAL_CACHE_KEYS={customMenu:'mula_cache_customMenu',prices:'mula_cache_prices',customMenuComps:'mula_cache_customMenuComps',menuAvailability:'mula_cache_menuAvailability',stock:'mula_cache_stock'};
 function today(){const d=new Date();const y=d.getFullYear();const m=String(d.getMonth()+1).padStart(2,'0');const day=String(d.getDate()).padStart(2,'0');return `${y}-${m}-${day}`;}
 function showToast(msg,dur=2400){let t=document.getElementById('cashierToast');if(!t){t=document.createElement('div');t.id='cashierToast';t.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 20px;border-radius:8px;font-size:14px;z-index:9999;opacity:0;transition:opacity 0.3s;pointer-events:none';document.body.appendChild(t);}t.textContent=msg;t.style.opacity='1';clearTimeout(t._t);t._t=setTimeout(()=>t.style.opacity='0',dur);}
+function enableKitchenSound(){kitchenSoundEnabled=true;localStorage.setItem('mula_kitchen_sound','1');playKitchenAlert();showToast('Suara dapur aktif');renderActiveTables();}
+function readJsonStore(key){try{return JSON.parse(localStorage.getItem(key)||'{}');}catch(e){return{};}}
+function writeJsonStore(key,val){localStorage.setItem(key,JSON.stringify(val||{}));}
+function getLocalDailyOrders(dateKey){return readJsonStore(LOCAL_DAILY_KEY)[dateKey]||{};}
+function setLocalDailyOrder(dateKey,finKey,payload){const store=readJsonStore(LOCAL_DAILY_KEY);if(!store[dateKey])store[dateKey]={};store[dateKey][finKey]=payload;writeJsonStore(LOCAL_DAILY_KEY,store);}
+function removeLocalDailyOrder(dateKey,finKey){const store=readJsonStore(LOCAL_DAILY_KEY);if(store[dateKey]){delete store[dateKey][finKey];if(!Object.keys(store[dateKey]).length)delete store[dateKey];writeJsonStore(LOCAL_DAILY_KEY,store);}}
+function getLocalActiveOrders(){return readJsonStore(LOCAL_ACTIVE_KEY);}
+function setLocalActiveOrder(tid,payload){const store=getLocalActiveOrders();store[tid]=payload;writeJsonStore(LOCAL_ACTIVE_KEY,store);}
+function removeLocalActiveOrder(tid){const store=getLocalActiveOrders();delete store[tid];writeJsonStore(LOCAL_ACTIVE_KEY,store);}
+function mergedDailyOrders(dateKey,remote){return Object.assign({},remote||{},getLocalDailyOrders(dateKey));}
+function mergedActiveOrders(remote){return Object.assign({},remote||{},getLocalActiveOrders());}
+function readLocalCache(key){return readJsonStore(LOCAL_CACHE_KEYS[key]||key);}
+function writeLocalCache(key,val){writeJsonStore(LOCAL_CACHE_KEYS[key]||key,val);}
+function hydrateLocalCaches(){
+customMenu=readLocalCache('customMenu');
+prices=readLocalCache('prices');
+customMenuComps=readLocalCache('customMenuComps');
+menuAvailability=readLocalCache('menuAvailability');
+stock=readLocalCache('stock');
+}
+hydrateLocalCaches();
 function injectCashierUxStyles(){if(document.getElementById('cashierUxStyles'))return;const s=document.createElement('style');s.id='cashierUxStyles';s.textContent=`
   .search-wrap{display:flex;align-items:center;gap:10px}
   .search-wrap-inner{flex:1;min-width:0}
@@ -78,14 +103,27 @@ async function syncOfflineQueue(){
   const remaining=[];
   for(const job of q){
     try{
+      if(job.type==='kitchen_done'){
+        await set(ref(db,`kitchenHistory/${job.dateKey}/${job.tid}`),job.donePayload);
+        await remove(ref(db,`tableOrders/${job.tid}`));
+        removeLocalActiveOrder(job.tid);
+        continue;
+      }
       const s=await get(ref(db,`orders/${job.dateKey}/${job.finKey}`));
       if(!s.val()){
          await set(ref(db,`orders/${job.dateKey}/${job.finKey}`),job.fPayload);
-         if(job.type==='kasir'){
-           await set(ref(db,`tableOrders/${job.tid}`),job.tPayload);
-         }else if(job.type==='guest_paid'){
-           await update(ref(db,`tableOrders/${job.tid}`),{status:'paid',manualConfirmedAt:Date.now()});
-         }
+      }
+      if(job.type==='kasir'){
+        await set(ref(db,`tableOrders/${job.tid}`),job.tPayload);
+      }else if(job.type==='guest_paid'){
+        await set(ref(db,`tableOrders/${job.tid}`),job.tPayload||{status:'active',manualConfirmedAt:Date.now(),kitchenQueuedAt:Date.now()});
+      }
+      if(job.type==='kasir'){
+        removeLocalDailyOrder(job.dateKey,job.finKey);
+        removeLocalActiveOrder(job.tid);
+      }else if(job.type==='guest_paid'){
+        removeLocalDailyOrder(job.dateKey,job.finKey);
+        removeLocalActiveOrder(job.tid);
       }
     }catch(e){remaining.push(job);}
   }
@@ -251,20 +289,20 @@ function subAll(){
 customReady=false;pricesReady=false;
 if(unsubCustom)unsubCustom();if(unsubPrices)unsubPrices();
 subOrders();
-unsubCustom=onValue(ref(db,'customMenu'),s=>{customMenu=s.val()||{};customReady=true;if(pricesReady)scheduleRender();});
-unsubPrices=onValue(ref(db,'priceOverrides'),s=>{prices=s.val()||{};pricesReady=true;if(customReady)scheduleRender();});
+unsubCustom=onValue(ref(db,'customMenu'),s=>{customMenu=s.val()||{};writeLocalCache('customMenu',customMenu);customReady=true;if(pricesReady)scheduleRender();});
+unsubPrices=onValue(ref(db,'priceOverrides'),s=>{prices=s.val()||{};writeLocalCache('prices',prices);pricesReady=true;if(customReady)scheduleRender();});
 if(unsubCustomComps)unsubCustomComps();
-unsubCustomComps=onValue(ref(db,'customMenuComps'),s=>{customMenuComps=s.val()||{};if(customReady&&pricesReady)scheduleRender();});
+unsubCustomComps=onValue(ref(db,'customMenuComps'),s=>{customMenuComps=s.val()||{};writeLocalCache('customMenuComps',customMenuComps);if(customReady&&pricesReady)scheduleRender();});
 if(unsubMenuAvailability)unsubMenuAvailability();
-unsubMenuAvailability=onValue(ref(db,'menuAvailability'),s=>{menuAvailability=s.val()||{};if(customReady&&pricesReady)scheduleRender();});
+unsubMenuAvailability=onValue(ref(db,'menuAvailability'),s=>{menuAvailability=s.val()||{};writeLocalCache('menuAvailability',menuAvailability);if(customReady&&pricesReady)scheduleRender();});
 if(unsubAllTables)unsubAllTables();
-unsubAllTables=onValue(ref(db,'tableOrders'),s=>{tableOrders=s.val()||{};renderPendingOrders();renderActiveTables();renderPendingPayments();notifyWaitingVerification();if(customReady&&pricesReady)scheduleRender();});
+unsubAllTables=onValue(ref(db,'tableOrders'),s=>{tableOrders=mergedActiveOrders(s.val()||{});renderPendingOrders();renderActiveTables();renderPendingPayments();notifyWaitingVerification();notifyActiveKitchenOrders();if(customReady&&pricesReady)scheduleRender();});
 onValue(ref(db, '.info/connected'), (snap) => {
   if (snap.val() === true) { setSync('green'); syncOfflineQueue(); } else { setSync('red'); }
 });
 }
-function subOrders(){if(unsubOrders)unsubOrders();unsubOrders=onValue(ref(db,`orders/${curDate}`),s=>{dailyOrders=s.val()||{};if(customReady&&pricesReady)scheduleRender();if(document.getElementById('tab-keuangan').classList.contains('active'))renderKeuangan();});}
-function subStock(){if(unsubStock)unsubStock();unsubStock=onValue(ref(db,'stock'),s=>{stock=s.val()||{};renderStock();});}
+function subOrders(){if(unsubOrders)unsubOrders();unsubOrders=onValue(ref(db,`orders/${curDate}`),s=>{dailyOrders=mergedDailyOrders(curDate,s.val()||{});if(customReady&&pricesReady)scheduleRender();if(document.getElementById('tab-keuangan').classList.contains('active'))renderKeuangan();});}
+function subStock(){if(unsubStock)unsubStock();unsubStock=onValue(ref(db,'stock'),s=>{stock=s.val()||{};writeLocalCache('stock',stock);renderStock();});}
 function subReceipts(){
 if(unsubReceipts)unsubReceipts();
 // Only fetch metadata + thumbnail — not full image

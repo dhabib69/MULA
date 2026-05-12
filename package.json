@@ -5,8 +5,9 @@
   "scripts": {
     "start": "node server.js",
     "build": "pkg server.js --targets node18-win-x64 --output dist/MULA-Cashier.exe --compress GZip",
-    "deploy": "firebase deploy"
-
+    "deploy": "firebase deploy --only hosting,database",
+    "deploy:hosting": "firebase deploy --only hosting",
+    "deploy:database": "firebase deploy --only database"
   },
   "pkg": {
     "assets": [

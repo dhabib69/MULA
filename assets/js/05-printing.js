@@ -43,7 +43,7 @@ function openQrModal(){
     const qrHolder=document.createElement('div');qrHolder.style.display='flex';qrHolder.style.justifyContent='center';
     const label=document.createElement('div');label.className='qr-label';label.textContent=`Meja ${id}`;
     div.appendChild(qrHolder);div.appendChild(label);grid.appendChild(div);
-    const url=`${APP_URL}?table=${id}`;
+    const url=tableUrl(id);
     try{new QRCode(qrHolder,{text:url,width:90,height:90,correctLevel:QRCode.CorrectLevel.M});}catch(e){qrHolder.textContent='Error';}
     div.addEventListener('click',()=>{
       const img=qrHolder.querySelector('img')||qrHolder.querySelector('canvas');
@@ -203,4 +203,3 @@ document.getElementById('printBtn').addEventListener('click',async()=>{
   document.getElementById('printArea').innerHTML=`<div class="receipt-print"><div class="rp-center"><div class="rp-logo">MULA</div><div class="rp-sub">Eatery</div><div class="rp-sub">${dStr} · ${tStr}</div></div><hr class="rp-divider">${rows}<hr class="rp-divider"><div class="rp-total"><span>TOTAL</span><span>${rp(total)}</span></div><hr class="rp-divider"><div class="rp-center rp-sub" style="margin-top:2mm">Terima kasih!</div></div>`;
   setTimeout(()=>window.print(),100);
 });
-

@@ -3,12 +3,14 @@ package com.mula.cashier
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
+import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.EditText
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,6 +27,10 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.RequestPermission()
     ) { }
 
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { startKitchenAlertService() }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
@@ -35,6 +41,8 @@ class MainActivity : AppCompatActivity() {
         setupWebView()
         binding.toolsButton.setOnClickListener { showToolsMenu() }
         ensureBluetoothPermission()
+        ensureNotificationPermission()
+        startKitchenAlertService()
         refreshPrinterStatus()
         loadConfiguredUrl()
     }
@@ -47,20 +55,62 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     private fun setupWebView() {
         binding.webView.apply {
-            webViewClient = WebViewClient()
+            webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView, url: String?) {
+                    super.onPageFinished(view, url)
+                    enforceFreshWebUi(view)
+                }
+            }
             webChromeClient = WebChromeClient()
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.useWideViewPort = true
             settings.loadWithOverviewMode = true
-            settings.cacheMode = WebSettings.LOAD_DEFAULT
+            settings.cacheMode = WebSettings.LOAD_NO_CACHE
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             addJavascriptInterface(printerBridge, "MulaPrinter")
         }
     }
 
     private fun loadConfiguredUrl() {
-        binding.webView.loadUrl(getPrefs().getString(PREF_URL, DEFAULT_URL) ?: DEFAULT_URL)
+        hardReload()
+    }
+
+    private fun hardReload() {
+        binding.webView.clearCache(true)
+        binding.webView.loadUrl(cacheBustedUrl())
+    }
+
+    private fun cacheBustedUrl(): String {
+        val base = getPrefs().getString(PREF_URL, DEFAULT_URL) ?: DEFAULT_URL
+        val separator = if (base.contains("?")) "&" else "?"
+        return "${base}${separator}app_v=${APP_WEB_VERSION}&t=${System.currentTimeMillis()}"
+    }
+
+    private fun enforceFreshWebUi(view: WebView) {
+        view.evaluateJavascript(
+            """
+            (function(){
+              try{
+                localStorage.setItem('mula_theme','dark');
+                document.documentElement.classList.remove('light-mode');
+                var b=document.getElementById('themeToggle');
+                if(b)b.textContent='Light';
+                if('serviceWorker' in navigator){
+                  navigator.serviceWorker.getRegistrations().then(function(rs){
+                    rs.forEach(function(r){ r.unregister(); });
+                  });
+                }
+                if(window.caches){
+                  caches.keys().then(function(keys){
+                    keys.forEach(function(k){ caches.delete(k); });
+                  });
+                }
+              }catch(e){}
+            })();
+            """.trimIndent(),
+            null
+        )
     }
 
     private fun showUrlDialog() {
@@ -75,7 +125,7 @@ class MainActivity : AppCompatActivity() {
                 val url = input.text?.toString()?.trim().orEmpty()
                 if (url.isNotEmpty()) {
                     getPrefs().edit().putString(PREF_URL, url).apply()
-                    binding.webView.loadUrl(url)
+                    hardReload()
                 }
             }
             .setNegativeButton("Cancel", null)
@@ -89,6 +139,22 @@ class MainActivity : AppCompatActivity() {
         missing.forEach { btPermissionLauncher.launch(it) }
     }
 
+    private fun ensureNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    private fun startKitchenAlertService() {
+        val intent = Intent(this, KitchenAlertService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ContextCompat.startForegroundService(this, intent)
+        } else {
+            startService(intent)
+        }
+    }
+
     private fun refreshPrinterStatus() {
         val selected = printerBridge.getSelectedPrinter()
         binding.printerStatus.text = if (selected == null) {
@@ -99,13 +165,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showToolsMenu() {
-        val items = arrayOf("Ubah URL", "Reload halaman", "Pilih printer")
+        val items = arrayOf("Ubah URL", "Reload paksa", "Pilih printer")
         AlertDialog.Builder(this)
-            .setTitle("Tools")
+            .setTitle("Settings")
             .setItems(items) { _, which ->
                 when (which) {
                     0 -> showUrlDialog()
-                    1 -> binding.webView.reload()
+                    1 -> hardReload()
                     2 -> showPrinterPicker()
                 }
             }
@@ -145,6 +211,6 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val PREF_URL = "cashier_url"
         private const val DEFAULT_URL = "https://mula-eatery.web.app/"
+        private const val APP_WEB_VERSION = 26
     }
 }
-

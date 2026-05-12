@@ -16,6 +16,14 @@
       ".read": "auth != null",
       ".write": "auth != null"
     },
+    "tableOrders": {
+      ".read": true,
+      ".write": true
+    },
+    "kitchenHistory": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    },
     "guestSessions": {
       ".read": true,
       ".write": "auth != null"

@@ -15,6 +15,14 @@
       "package.json",
       "package-lock.json",
       "demo-state.json",
+      "*.srt",
+      "*.pdf",
+      "*.apk",
+      "orders*.json",
+      "tableOrders*.json",
+      "temp_script_*",
+      "*_output.txt",
+      "*_err.txt",
       "CLAUDE.md",
       "extracted.txt",
       "jsdom_logs.txt",
@@ -27,8 +35,5 @@
         "destination": "/index.html"
       }
     ]
-  },
-  "functions": {
-    "source": "functions"
   }
 }

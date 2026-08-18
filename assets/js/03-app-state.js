@@ -2,13 +2,17 @@
 var role=null,curDate=today(),orders={},stock={},receipts={},customMenu={},prices={},customMenuComps={},menuAvailability={},pendingNewRows=[],selFile=null,syncT=null,editPriceId=null,isManageMode=false;
 var unsubOrders=null,unsubStock=null,unsubReceipts=null,unsubCustom=null,unsubPrices=null,unsubCustomComps=null,unsubMenuAvailability=null;
 var curTable=null,tableOrders={},dailyOrders={},unsubTableOrder=null,unsubAllTables=null;
-var customReady=false,pricesReady=false,renderScheduled=false;
+var liveTableSlices={active:{},waiting:{},paid:{}};
+var outboxFinKeys=new Set(),outboxDbPromise=null;
+var customReady=false,pricesReady=false,renderScheduled=false,tableRenderScheduled=false;
 var paymentAlertSeen=new Set();
 var kitchenAlertSeen=new Set(),kitchenTimerInterval=null,kitchenSoundEnabled=localStorage.getItem('mula_kitchen_sound')==='1';
 var LOCAL_DAILY_KEY='mula_local_daily_orders';
 var LOCAL_ACTIVE_KEY='mula_local_active_orders';
 var LOCAL_CACHE_KEYS={customMenu:'mula_cache_customMenu',prices:'mula_cache_prices',customMenuComps:'mula_cache_customMenuComps',menuAvailability:'mula_cache_menuAvailability',stock:'mula_cache_stock'};
 function today(){const d=new Date();const y=d.getFullYear();const m=String(d.getMonth()+1).padStart(2,'0');const day=String(d.getDate()).padStart(2,'0');return `${y}-${m}-${day}`;}
+function isOrderDateToday(){return curDate===today();}
+function requireTodayForOrder(){if(isOrderDateToday())return true;showToast('Pesanan hanya dapat dibuat untuk tanggal hari ini.');return false;}
 function showToast(msg,dur=2400){let t=document.getElementById('cashierToast');if(!t){t=document.createElement('div');t.id='cashierToast';t.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 20px;border-radius:8px;font-size:14px;z-index:9999;opacity:0;transition:opacity 0.3s;pointer-events:none';document.body.appendChild(t);}t.textContent=msg;t.style.opacity='1';clearTimeout(t._t);t._t=setTimeout(()=>t.style.opacity='0',dur);}
 function enableKitchenSound(){kitchenSoundEnabled=true;localStorage.setItem('mula_kitchen_sound','1');playKitchenAlert();showToast('Suara dapur aktif');renderActiveTables();}
 function readJsonStore(key){try{return JSON.parse(localStorage.getItem(key)||'{}');}catch(e){return{};}}
@@ -19,7 +23,29 @@ function removeLocalDailyOrder(dateKey,finKey){const store=readJsonStore(LOCAL_D
 function getLocalActiveOrders(){return readJsonStore(LOCAL_ACTIVE_KEY);}
 function setLocalActiveOrder(tid,payload){const store=getLocalActiveOrders();store[tid]=payload;writeJsonStore(LOCAL_ACTIVE_KEY,store);}
 function removeLocalActiveOrder(tid){const store=getLocalActiveOrders();delete store[tid];writeJsonStore(LOCAL_ACTIVE_KEY,store);}
-function mergedDailyOrders(dateKey,remote){return Object.assign({},remote||{},getLocalDailyOrders(dateKey));}
+function pruneStaleLocalOrders(dateKey,remote){
+  if(!remote)return;
+  const localDaily=getLocalDailyOrders(dateKey);
+  const localKeys=Object.keys(localDaily);
+  if(!localKeys.length)return;
+  let q=[];try{q=JSON.parse(localStorage.getItem('mula_offline_queue')||'[]');}catch(e){}
+  outboxFinKeys.forEach(k=>q.push({finKey:k}));
+  const queuedFinKeys=new Set(q.map(j=>j.finKey).filter(Boolean));
+  let changed=false;
+  for(const finKey of localKeys){
+    if(remote[finKey]||!queuedFinKeys.has(finKey)){
+      delete localDaily[finKey];
+      changed=true;
+    }
+  }
+  if(changed){
+    const store=readJsonStore(LOCAL_DAILY_KEY);
+    if(Object.keys(localDaily).length===0)delete store[dateKey];
+    else store[dateKey]=localDaily;
+    writeJsonStore(LOCAL_DAILY_KEY,store);
+  }
+}
+function mergedDailyOrders(dateKey,remote){pruneStaleLocalOrders(dateKey,remote);return Object.assign({},remote||{},getLocalDailyOrders(dateKey));}
 function mergedActiveOrders(remote){return Object.assign({},remote||{},getLocalActiveOrders());}
 function readLocalCache(key){return readJsonStore(LOCAL_CACHE_KEYS[key]||key);}
 function writeLocalCache(key,val){writeJsonStore(LOCAL_CACHE_KEYS[key]||key,val);}
@@ -90,45 +116,55 @@ injectCashierUxStyles();
 function fmtDate(d){const[y,m,day]=d.split('-');return`${day}/${m}`;}
 function fmtDateFull(d){const[y,m,day]=d.split('-');const M=['Jan','Feb','Mar','Apr','Mei','Jun','Jul','Agu','Sep','Okt','Nov','Des'];return`${parseInt(day)} ${M[m-1]} ${y}`;}
 function rp(n){return'Rp '+Math.round(n||0).toLocaleString('id');}
-function setSync(s){document.getElementById('syncDot').className='sync-dot'+(s?' '+s:'');}
+function setSync(s){const dot=document.getElementById('syncDot');if(!dot)return;dot.className='sync-dot'+(s?' '+s:'');const labels={green:'Tersinkron',orange:'Mengirim pesanan',red:'Menunggu koneksi'};dot.title=labels[s]||'Status koneksi';dot.setAttribute('aria-label',labels[s]||'Status koneksi');}
 var isSyncingQueue=false;
 async function syncOfflineQueue(){
   if(isSyncingQueue)return;
-  const raw=localStorage.getItem('mula_offline_queue');
-  if(!raw)return;
-  let q=[];try{q=JSON.parse(raw);}catch(e){}
+  const q=await readOutbox();
   if(!q.length)return;
   isSyncingQueue=true;
   setSync('orange');
+  const updates={};
+  const syncedJobs=[];
   const remaining=[];
+  const now=Date.now();
   for(const job of q){
+    if(job.nextRetryAt&&job.nextRetryAt>now){remaining.push(job);continue;}
     try{
       if(job.type==='kitchen_done'){
-        await set(ref(db,`kitchenHistory/${job.dateKey}/${job.tid}`),job.donePayload);
-        await remove(ref(db,`tableOrders/${job.tid}`));
-        removeLocalActiveOrder(job.tid);
-        continue;
+        updates[`kitchenHistory/${job.dateKey}/${job.tid}`]=job.donePayload;
+        updates[`tableOrders/${job.tid}`]=null;
+        syncedJobs.push(job);
+      }else{
+        updates[`orders/${job.dateKey}/${job.finKey}`]=job.fPayload;
+        if(job.type==='kasir'){
+          updates[`tableOrders/${job.tid}`]=job.tPayload;
+        }else if(job.type==='guest_paid'){
+          updates[`tableOrders/${job.tid}`]=job.tPayload||{status:'active',manualConfirmedAt:Date.now(),kitchenQueuedAt:Date.now()};
+        }
+        syncedJobs.push(job);
       }
-      const s=await get(ref(db,`orders/${job.dateKey}/${job.finKey}`));
-      if(!s.val()){
-         await set(ref(db,`orders/${job.dateKey}/${job.finKey}`),job.fPayload);
-      }
-      if(job.type==='kasir'){
-        await set(ref(db,`tableOrders/${job.tid}`),job.tPayload);
-      }else if(job.type==='guest_paid'){
-        await set(ref(db,`tableOrders/${job.tid}`),job.tPayload||{status:'active',manualConfirmedAt:Date.now(),kitchenQueuedAt:Date.now()});
-      }
-      if(job.type==='kasir'){
-        removeLocalDailyOrder(job.dateKey,job.finKey);
-        removeLocalActiveOrder(job.tid);
-      }else if(job.type==='guest_paid'){
-        removeLocalDailyOrder(job.dateKey,job.finKey);
-        removeLocalActiveOrder(job.tid);
-      }
-    }catch(e){remaining.push(job);}
+    }catch(e){remaining.push({...job,attempts:(job.attempts||0)+1,lastError:String(e?.message||e),nextRetryAt:now+Math.min(60000,1000*Math.pow(2,Math.min(6,job.attempts||0)))});}
   }
-  if(remaining.length===0){localStorage.removeItem('mula_offline_queue');setSync('green');}
-  else{localStorage.setItem('mula_offline_queue',JSON.stringify(remaining));setSync('red');}
+  if(Object.keys(updates).length>0){
+    try{
+      await update(ref(db),updates);
+      for(const job of syncedJobs){
+        if(job.type==='kitchen_done'){
+          removeLocalActiveOrder(job.tid);
+        }else{
+          removeLocalDailyOrder(job.dateKey,job.finKey);
+          removeLocalActiveOrder(job.tid);
+        }
+      }
+    }catch(e){
+      console.error('Batch sync failed, fallback retry:',e);
+      syncedJobs.forEach(j=>remaining.push({...j,attempts:(j.attempts||0)+1,lastError:String(e?.message||e),nextRetryAt:Date.now()+Math.min(60000,1000*Math.pow(2,Math.min(6,j.attempts||0)))}));
+    }
+  }
+  await writeOutbox(remaining);
+  if(remaining.length===0)setSync('green');
+  else setSync('red');
   isSyncingQueue=false;
 }
 setInterval(syncOfflineQueue, 10000);
@@ -179,7 +215,14 @@ return lines;
 }
 function normalizeGuestItems(cart){const out=[];Object.entries(cart||{}).forEach(([id,data])=>{const entry=normalizeOrderEntry(data);if(!entry.qty)return;out.push({id,qty:entry.qty,note:entry.note,tanpaNasiQty:entry.tanpaNasiQty,tanpaNasi:entry.tanpaNasi});});return out;}
 function registerCoreEventListeners(){
-document.getElementById('adminBtn').addEventListener('click',()=>{
+  if(window.mulaCoreEventsBound)return false;
+  window.mulaCoreEventsBound=true;
+document.getElementById('adminBtn').addEventListener('click',async()=>{
+  // Wait briefly for Firebase LOCAL persistence before showing a login form.
+  // A restored admin session should always use quick access.
+  if(typeof authStateReady!=='undefined'&&!currentUser){
+    await Promise.race([authStateReady,new Promise(resolve=>setTimeout(resolve,1200))]);
+  }
   if(currentUser && !currentUser.isAnonymous){
     // Already logged in via Firebase — go straight in
     enterApp('admin');
@@ -192,8 +235,12 @@ document.getElementById('karyawanBtn').addEventListener('click',()=>enterApp('ka
 document.getElementById('pwSubmit').addEventListener('click',tryLogin);
 document.getElementById('pwCancel').addEventListener('click',()=>{document.getElementById('pwModal').classList.remove('show');document.getElementById('pwErr').style.display='none';document.getElementById('pwInput').value='';});
 document.getElementById('pwInput').addEventListener('keydown',e=>{if(e.key==='Enter')tryLogin();});
-document.getElementById('logoutBtn').addEventListener('click',()=>location.reload());
-document.getElementById('dateInput').addEventListener('change',e=>{if(!e.target.value)return;curDate=e.target.value;document.getElementById('dateLabel').textContent=fmtDate(curDate);subOrders();if(document.getElementById('tab-keuangan').classList.contains('active'))renderKeuangan();});
+document.getElementById('logoutBtn').addEventListener('click',async()=>{
+  try{if(fbAuth&&currentUser&&!currentUser.isAnonymous)await fbAuth.signOut();}catch(e){console.warn('Logout gagal',e);}
+  role=null;
+  location.reload();
+});
+document.getElementById('dateInput').addEventListener('change',e=>{if(!e.target.value)return;curDate=e.target.value;orders={};document.getElementById('dateLabel').textContent=fmtDate(curDate);subOrders();if(typeof renderOrders==='function')renderOrders();if(document.getElementById('tab-keuangan').classList.contains('active'))renderKeuangan();});
 document.getElementById('closeRMBtn').addEventListener('click',()=>document.getElementById('receiptModal').classList.remove('show'));
 document.getElementById('uploadArea').addEventListener('click',()=>document.getElementById('receiptInput').click());
 document.getElementById('receiptInput').addEventListener('change',e=>previewReceipt(e.target));
@@ -226,7 +273,8 @@ document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'
 btn.classList.add('active');
 document.getElementById('tab-'+btn.dataset.tab).classList.add('active');
 if(btn.dataset.tab==='stock'&&!unsubStock){subStock();subReceipts();}
-if(btn.dataset.tab==='keuangan'){if(!unsubReceipts)subReceipts();renderKeuangan();}
+if(btn.dataset.tab==='keuangan'){if(!unsubReceipts)subReceipts();subKitchenHistory();renderKeuangan();}
+if(btn.dataset.tab==='rangkuman'){renderRangkuman();}
 });});
 document.getElementById('addMenuCancel').addEventListener('click',()=>document.getElementById('addMenuModal').classList.remove('show'));
 document.getElementById('addRowBtn').addEventListener('click',()=>{const val=document.getElementById('newRowInput').value.trim();if(!val)return;if(!pendingNewRows.includes(val))pendingNewRows.push(val);document.getElementById('newRowInput').value='';const el=document.getElementById('newRowsList');el.innerHTML=pendingNewRows.map((r,i)=>`<div class="new-row-tag">${r}<button data-i="${i}">×</button></div>`).join('');el.querySelectorAll('button').forEach(btn=>{btn.addEventListener('click',()=>{pendingNewRows.splice(parseInt(btn.dataset.i),1);btn.closest('.new-row-tag').remove();});});});
@@ -234,6 +282,8 @@ document.getElementById('addMenuSave').addEventListener('click',saveMenu);
 document.getElementById('editPriceCancel').addEventListener('click',()=>document.getElementById('editPriceModal').classList.remove('show'));
 document.getElementById('editPriceSave').addEventListener('click',savePrice);
 }
+
+if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',registerCoreEventListeners);}else{registerCoreEventListeners();}
 
 
 async function tryLogin(){
@@ -260,6 +310,7 @@ async function tryLogin(){
   if(err)err.style.display='none';
 
   try{
+    if(typeof authPersistenceReady!=='undefined')await authPersistenceReady;
     await fbAuth.signInWithEmailAndPassword(email,pw);
     document.getElementById('pwModal').classList.remove('show');
     if(pwInp)pwInp.value='';
@@ -273,6 +324,7 @@ async function tryLogin(){
 
 
 function enterApp(r){
+if(role===r&&document.getElementById('app')?.style.display==='block')return;
 role=r;
 document.getElementById('lockScreen').style.display='none';
 document.getElementById('app').style.display='block';
@@ -296,7 +348,11 @@ unsubCustomComps=onValue(ref(db,'customMenuComps'),s=>{customMenuComps=s.val()||
 if(unsubMenuAvailability)unsubMenuAvailability();
 unsubMenuAvailability=onValue(ref(db,'menuAvailability'),s=>{menuAvailability=s.val()||{};writeLocalCache('menuAvailability',menuAvailability);if(customReady&&pricesReady)scheduleRender();});
 if(unsubAllTables)unsubAllTables();
-unsubAllTables=onValue(ref(db,'tableOrders'),s=>{tableOrders=mergedActiveOrders(s.val()||{});renderPendingOrders();renderActiveTables();renderPendingPayments();notifyWaitingVerification();notifyActiveKitchenOrders();if(customReady&&pricesReady)scheduleRender();});
+liveTableSlices={active:{},waiting:{},paid:{}};
+const tableStatusRef=(status)=>{const r=ref(db,'tableOrders');return typeof DEMO_MODE!=='undefined'&&DEMO_MODE?r:r.orderByChild('status').equalTo(status);};
+const refreshTableSlices=()=>{tableOrders=mergedActiveOrders(Object.assign({},liveTableSlices.active,liveTableSlices.waiting,liveTableSlices.paid));notifyWaitingVerification();notifyActiveKitchenOrders();if(tableRenderScheduled)return;tableRenderScheduled=true;requestAnimationFrame(()=>{tableRenderScheduled=false;renderPendingOrders();renderActiveTables();renderPendingPayments();if(customReady&&pricesReady)scheduleRender();});};
+const unsubs=[['active',tableStatusRef('active')],['waiting',tableStatusRef('waiting_verification')],['paid',tableStatusRef('paid')]].map(([name,queryRef])=>onValue(queryRef,s=>{liveTableSlices[name]=s.val()||{};refreshTableSlices();}));
+unsubAllTables=()=>unsubs.forEach(unsub=>{try{unsub&&unsub();}catch(e){}});
 onValue(ref(db, '.info/connected'), (snap) => {
   if (snap.val() === true) { setSync('green'); syncOfflineQueue(); } else { setSync('red'); }
 });
@@ -318,5 +374,42 @@ if(document.getElementById('tab-keuangan').classList.contains('active'))renderKe
 });
 }
 function calcTotal(){let tp=0;getAll().forEach(i=>{tp+=calcOrderItemTotal(i,orders[i.id]);});return tp;}
+function subKitchenHistory(){if(unsubKitchenHistory)unsubKitchenHistory();unsubKitchenHistory=onValue(ref(db,`kitchenHistory/${curDate}`),s=>{kitchenHistory=s.val()||{};if(document.getElementById('tab-keuangan').classList.contains('active'))renderKeuangan();});}
+function openOutboxDb(){
+  if(outboxDbPromise)return outboxDbPromise;
+  outboxDbPromise=new Promise((resolve,reject)=>{
+    if(!('indexedDB' in window))return reject(new Error('IndexedDB unavailable'));
+    const req=indexedDB.open('mula-outbox',1);
+    req.onupgradeneeded=()=>req.result.createObjectStore('jobs',{keyPath:'id'});
+    req.onsuccess=()=>resolve(req.result);
+    req.onerror=()=>reject(req.error||new Error('IndexedDB open failed'));
+  });
+  return outboxDbPromise;
+}
+function outboxRequest(mode,action){return openOutboxDb().then(db=>new Promise((resolve,reject)=>{const tx=db.transaction('jobs',mode),store=tx.objectStore('jobs'),req=action(store);req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);tx.onerror=()=>reject(tx.error);}));}
+async function readOutbox(){
+  try{
+    let jobs=await outboxRequest('readonly',store=>store.getAll());
+    if(!jobs.length){try{const legacy=JSON.parse(localStorage.getItem('mula_offline_queue')||'[]');if(legacy.length){jobs=legacy.map((j,i)=>({...j,id:j.id||`legacy-${j.finKey||j.tid||i}-${Date.now()}`}));await outboxRequest('readwrite',store=>{jobs.forEach(j=>store.put(j));return store.put({id:'__noop__',legacy:true});});await outboxRequest('readwrite',store=>store.delete('__noop__'));localStorage.removeItem('mula_offline_queue');}}catch(e){}}
+    outboxFinKeys=new Set(jobs.map(j=>j.finKey).filter(Boolean));
+    return jobs;
+  }catch(e){try{return JSON.parse(localStorage.getItem('mula_offline_queue')||'[]');}catch(err){return[];}}
+}
+async function writeOutbox(jobs){
+  outboxFinKeys=new Set(jobs.map(j=>j.finKey).filter(Boolean));
+  try{const db=await openOutboxDb();await new Promise((resolve,reject)=>{const tx=db.transaction('jobs','readwrite'),store=tx.objectStore('jobs');store.clear();jobs.forEach(j=>store.put(j));tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});localStorage.removeItem('mula_offline_queue');}
+  catch(e){if(jobs.length)localStorage.setItem('mula_offline_queue',JSON.stringify(jobs));else localStorage.removeItem('mula_offline_queue');}
+}
+async function queueOfflineJob(job){
+  const full={...job,id:job.id||`${job.type||'order'}-${job.finKey||job.tid||Date.now()}-${Math.random().toString(36).slice(2,7)}`,queuedAt:Date.now(),attempts:0};
+  outboxFinKeys.add(full.finKey);
+  try{await outboxRequest('readwrite',store=>store.put(full));}
+  catch(e){const q=await readOutbox();q.push(full);localStorage.setItem('mula_offline_queue',JSON.stringify(q));}
+}
+async function removeQueuedOrder(tid,finKey){
+  const q=await readOutbox();
+  const remaining=q.filter(job=>(!tid||job.tid!==tid)&&(!finKey||job.finKey!==finKey));
+  await writeOutbox(remaining);
+}
 function saveOrders(){ /* Local cart now, pushed on Proses */ }
 async function setItemOutOfStock(id,isOut){try{await set(ref(db,`menuAvailability/${id}`),!!isOut);}catch(e){alert('Gagal update status menu: '+e.message);}}

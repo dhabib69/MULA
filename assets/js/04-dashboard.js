@@ -15,6 +15,7 @@ var sectionQty={};sections.forEach(sec=>{sectionQty[sec.cat]=sec.items.reduce((s
 
 var manageBtn=document.getElementById('manageToggleBtn');if(manageBtn){manageBtn.classList.toggle('active',isManageMode);manageBtn.textContent=isManageMode?'Selesai Kelola':'Mode Kelola';}
 var h='';
+if(!isOrderDateToday())h+='<div style="margin:12px 20px;padding:10px 12px;border:1px solid rgba(212,168,83,.35);border-radius:10px;background:rgba(212,168,83,.08);color:var(--gold);font-size:12px">Mode riwayat: pesanan baru hanya dapat dibuat untuk tanggal hari ini.</div>';
 if(activeItems.length){
 var activeTotal=activeItems.reduce((sum,i)=>sum+calcOrderItemTotal(i,orders[i.id]),0);
 h+=`<div class="order-focus-strip"><div class="order-focus-main"><span class="order-focus-label">Order Aktif</span><span class="order-focus-total">${rp(activeTotal)}</span></div><div class="order-focus-chips">${activeItems.slice(0,8).map(i=>`<button class="order-chip" data-id="${i.id}"><strong>x${orders[i.id].qty}</strong>${esc(i.name)}</button>`).join('')}${activeItems.length>8?`<span class="order-chip">+${activeItems.length-8} lain</span>`:''}</div><button class="order-clear-btn" id="clearOrderBtn">Kosongkan</button></div>`;
@@ -64,6 +65,7 @@ btn.disabled=false;
 document.getElementById('menuList').querySelectorAll('.qty-btn').forEach(btn=>{
   btn.addEventListener('click',()=>{
 if(!role)return;
+if(!requireTodayForOrder())return;
 var id=btn.dataset.id,d=parseInt(btn.dataset.d);
 if(getAll().find(x=>x.id===id)?.outOfStock)return;
 if(!orders[id])orders[id]={qty:0,note:'',tanpaNasiQty:0};
@@ -84,6 +86,7 @@ renderOrders();saveOrders();
 document.getElementById('menuList').querySelectorAll('.tanpa-nasi-step').forEach(btn=>{
 btn.addEventListener('click',()=>{
 if(!role)return;
+if(!requireTodayForOrder())return;
 var id=btn.dataset.id,delta=parseInt(btn.dataset.d||'0');
 var cur=normalizeOrderEntry(orders[id]||{qty:0,note:'',tanpaNasiQty:0});
 if(!cur.qty)return;
@@ -96,6 +99,7 @@ renderOrders();
 document.getElementById('menuList').querySelectorAll('.note-input').forEach(inp=>{
 inp.addEventListener('change',()=>{
 if(!role)return;
+if(!requireTodayForOrder())return;
 orders[inp.dataset.id]=normalizeOrderEntry({...orders[inp.dataset.id],note:inp.value});
 saveOrders();
 });
@@ -110,26 +114,44 @@ var isNasi=NASI_IDS.includes(item.id);
 var tnQty=getTanpaNasiQty(o);
 var denganNasiQty=getDenganNasiQty(o);
 var out=!!item.outOfStock;
+var orderLocked=!isOrderDateToday();
 var isCustom=!!Object.values(customMenu).find(cm=>cm.id===item.id);
 var delay=`animation-delay:${idx*0.03}s`;
 var avgPrice=o.qty?Math.round(calcOrderItemTotal(item,o)/o.qty):item.price;
-var nasiBtn=role&&isNasi&&o.qty?`<div class="tanpa-nasi-split"><span class="tanpa-nasi-label">Tanpa Nasi</span><button class="tanpa-nasi-step" data-id="${item.id}" data-d="-1" ${tnQty<=0?'disabled':''}>-</button><span class="tanpa-nasi-count">${tnQty}/${o.qty}</span><button class="tanpa-nasi-step${tnQty?' active':''}" data-id="${item.id}" data-d="1" ${tnQty>=o.qty?'disabled':''}>+</button></div>`:'';
+var nasiBtn=role&&isNasi&&o.qty?`<div class="tanpa-nasi-split"><span class="tanpa-nasi-label">Tanpa Nasi</span><button class="tanpa-nasi-step" data-id="${item.id}" data-d="-1" ${tnQty<=0||orderLocked?'disabled':''}>-</button><span class="tanpa-nasi-count">${tnQty}/${o.qty}</span><button class="tanpa-nasi-step${tnQty?' active':''}" data-id="${item.id}" data-d="1" ${tnQty>=o.qty||orderLocked?'disabled':''}>+</button></div>`:'';
 var priceStr=isNasi&&tnQty?`${denganNasiQty?`<span style="display:block;font-size:11px;color:var(--muted2)">${denganNasiQty} nasi · ${rp(item.price)}</span>`:''}<span style="display:block">${rp(avgPrice)}${isAdmin&&isManageMode?' Edit':''}</span>`:rp(item.price)+(isAdmin&&isManageMode?' Edit':'');
 var stockBtn=role&&isManageMode?`<button class="availability-btn ${out?' active':''}" data-id="${item.id}" data-next="${out?0:1}" style="background:${out?'#8f2f2f':'rgba(241,212,138,0.12)'};color:${out?'#fff':'var(--gold)'}">${out?'Tersedia':'Tandai Habis'}</button>`:'';
 var controls=role
-? `<div class="item-controls"><button class="qty-btn minus" data-id="${item.id}" data-d="-1">-</button><div class="qty-display ${o.qty>0?'active':''}" id="q_${item.id}">${o.qty}</div><button class="qty-btn plus" data-id="${item.id}" data-d="1">+</button>
+? `<div class="item-controls"><button class="qty-btn minus" data-id="${item.id}" data-d="-1" ${orderLocked?'disabled':''}>-</button><div class="qty-display ${o.qty>0?'active':''}" id="q_${item.id}">${o.qty}</div><button class="qty-btn plus" data-id="${item.id}" data-d="1" ${orderLocked?'disabled':''}>+</button>
 ${isAdmin&&isCustom&&isManageMode?`<button class="del-menu-btn" data-id="${item.id}" title="Hapus menu">×</button>`:''}
 </div>`
 : o.qty>0?`<div class="qty-display active" style="border-radius:8px">${o.qty}</div>`:'';
 return`<div class="menu-item${out?' readonly':''}${o.qty>0?' selected':''}" data-id="${item.id}" data-name="${esc(item.name).toLowerCase()}" style="${delay}${out?';opacity:0.72':''}"><div class="item-price-wrap"><div class="item-title-row"><div><div class="item-name">${esc(item.name)}${out?` <span style="font-size:10px;color:#ff8e8e;font-family:Outfit,sans-serif;letter-spacing:1px">HABIS</span>`:''}</div><div class="item-price${isAdmin&&isManageMode?' editable':''}" data-id="${item.id}" data-name="${item.name}" data-price="${item.price}">${priceStr}
 </div>${nasiBtn}</div><div class="item-admin-actions">${stockBtn}</div></div></div>
 ${controls}
-${role?`<div class="item-note" id="note-wrap-${item.id}" style="display:${o.qty>0?'block':'none'}"><input class="note-input" type="text" data-id="${item.id}" placeholder="Catatan..." value="${(o.note||'').replace(/"/g,'&quot;')}"></div>`:''}
+${role?`<div class="item-note" id="note-wrap-${item.id}" style="display:${o.qty>0?'block':'none'}"><input class="note-input" type="text" data-id="${item.id}" placeholder="Catatan..." value="${(o.note||'').replace(/"/g,'&quot;')}" ${orderLocked?'disabled':''}></div>`:''}
 </div>`;
 }
-function getCookOrders(){const agg={};Object.entries(tableOrders).forEach(([tid,t])=>{if(t.status!=='active')return;Object.entries(t.items||{}).forEach(([id,data])=>{const entry=normalizeOrderEntry(data);if(!agg[id])agg[id]={qty:0,tanpaNasiQty:0};agg[id].qty+=entry.qty;agg[id].tanpaNasiQty+=entry.tanpaNasiQty;});});Object.entries(orders).forEach(([id,data])=>{const entry=normalizeOrderEntry(data);if(!agg[id])agg[id]={qty:0,tanpaNasiQty:0};agg[id].qty+=entry.qty;agg[id].tanpaNasiQty+=entry.tanpaNasiQty;});return agg;}
-function getDailyOrderSummary(){const all=getAll(),agg={};function add(id,data){const qty=Math.max(0,parseInt(data?.qty||0));if(!qty)return;const m=all.find(x=>x.id===id),price=m?calcMenuPrice(m,data):0;if(!agg[id])agg[id]={id,name:m?.name||id,qty:0,total:0};agg[id].qty+=qty;agg[id].total+=qty*price;}Object.entries(dailyOrders||{}).forEach(([txId,tx])=>{if(!tx)return;if(tx.qty!==undefined){add(txId,tx);return;}Object.entries(tx.items||{}).forEach(([id,data])=>add(id,data));});return Object.values(agg).filter(r=>r.qty>0).sort((a,b)=>b.qty-a.qty||a.name.localeCompare(b.name));}
-function renderOrderSummary(){const el=document.getElementById('cookList');if(!el)return;const rows=getDailyOrderSummary();if(!rows.length){el.innerHTML='<div class="empty-msg">Belum ada order hari ini</div>';return;}el.innerHTML=`<div class="cook-summary-grid">${rows.map(r=>`<div class="cook-item"><span class="cook-name">${esc(r.name)}<span style="display:block;font-family:Outfit,sans-serif;font-size:11px;color:var(--muted2);font-weight:500;margin-top:3px">${rp(r.total)}</span></span><span class="cook-qty active">${r.qty}</span></div>`).join('')}</div>`;}
+function getCookOrders(){const agg={};Object.entries(tableOrders).forEach(([tid,t])=>{if(t.status!=='active')return;const comp=t.completedItems||{};Object.entries(t.items||{}).forEach(([id,data])=>{const menu=getAll().find(m=>m.id===id);if(!menu)return;buildOrderLines(menu,data).forEach((l,idx)=>{const key=`${id}_${idx}`;if(comp[key])return;if(!agg[id])agg[id]={qty:0,tanpaNasiQty:0};if(l.name.includes('(tnp nasi)'))agg[id].tanpaNasiQty+=l.qty;else agg[id].qty+=l.qty;});});});Object.entries(orders).forEach(([id,data])=>{const entry=normalizeOrderEntry(data);if(!agg[id])agg[id]={qty:0,tanpaNasiQty:0};agg[id].qty+=entry.qty;agg[id].tanpaNasiQty+=entry.tanpaNasiQty;});return agg;}
+function getDailyOrderSummary(){const all=getAll(),agg={};function add(id,data){const qty=Math.max(0,parseInt(data?.qty||0));if(!qty)return;const m=all.find(x=>x.id===id),price=m?calcMenuPrice(m,data):0;if(!agg[id])agg[id]={id,name:m?.name||id,qty:0,total:0};agg[id].qty+=qty;agg[id].total+=qty*price;}Object.entries(dailyOrders||{}).forEach(([txId,tx])=>{if(!tx||txId==='receipts')return;if(tx.qty!==undefined){add(txId,tx);return;}Object.entries(tx.items||{}).forEach(([id,data])=>add(id,data));});return Object.values(agg).filter(r=>r.qty>0).sort((a,b)=>b.qty-a.qty||a.name.localeCompare(b.name));}
+function renderOrderSummary(){const el=document.getElementById('cookList');if(!el)return;const active=getCookOrders(),all=getAll();const rows=Object.entries(active).map(([id,data])=>{const menu=all.find(m=>m.id===id);return{id,name:menu?.name||id,qty:data.qty||0,tanpaNasiQty:data.tanpaNasiQty||0};}).filter(r=>r.qty>0).sort((a,b)=>b.qty-a.qty||a.name.localeCompare(b.name));if(!rows.length){el.innerHTML='<div class="empty-msg">Belum ada order aktif</div>';return;}el.innerHTML=`<div class="cook-summary-grid">${rows.map(r=>`<div class="cook-item"><span class="cook-name">${esc(r.name)}${r.tanpaNasiQty?`<span style="display:block;font-family:Outfit,sans-serif;font-size:11px;color:var(--muted2);font-weight:500;margin-top:3px">${r.tanpaNasiQty} tanpa nasi</span>`:''}</span><span class="cook-qty active">${r.qty}</span></div>`).join('')}</div>`;}
+function filterMenu(q){
+  const str=(q||'').trim().toLowerCase();
+  const menuList=document.getElementById('menuList');if(!menuList)return;
+  menuList.querySelectorAll('.menu-grid').forEach(grid=>{
+    const cat=grid.dataset.section;
+    const secHead=document.getElementById('sec-'+cat);
+    let count=0;
+    grid.querySelectorAll('.menu-item').forEach(item=>{
+      const name=(item.dataset.name||'').toLowerCase();
+      const match=!str||name.includes(str);
+      item.style.display=match?'':'none';
+      if(match)count++;
+    });
+    if(secHead)secHead.style.display=(!str||count>0)?'':'none';
+    grid.style.display=(!str||count>0)?'':'none';
+  });
+}
 function calcC(c){const co=getCookOrders();let t=c.s.reduce((s,x)=>{const qty=co[x.id]?.qty||0;const skipQty=c.id==='nasi_putih'?(co[x.id]?.tanpaNasiQty||0):0;return s+Math.max(0,qty-skipQty)*x.q;},0);Object.entries(customMenuComps).forEach(([mid,mc])=>{if(mc.contribs&&mc.contribs.includes(c.id))t+=co[mid]?.qty||0;});return t;}
 function getCustomRows(){const rows={};Object.entries(customMenuComps).forEach(([mid,mc])=>{(mc.newRows||[]).forEach(n=>{if(!rows[n])rows[n]={name:n,menuIds:[]};rows[n].menuIds.push(mid);});});return Object.values(rows);}
 function safeId(n){return n.replace(/[^a-zA-Z0-9]/g,'_');}
@@ -138,7 +160,8 @@ var tq=0,tp=0;
 getAll().forEach(i=>{tq+=orders[i.id]?.qty||0;tp+=calcOrderItemTotal(i,orders[i.id]);});
 document.getElementById('totalQty').textContent=tq;
 document.getElementById('totalPrice').textContent=rp(tp);
-var btn=document.getElementById('prosesManualBtn');if(btn)btn.disabled=tq<=0;
+var btn=document.getElementById('prosesManualBtn');if(btn)btn.disabled=tq<=0||!isOrderDateToday();
+var bar=document.querySelector('.total-bar');if(bar)bar.style.display=tq>0?'flex':'none';
 }
 function openAddMenu(){document.getElementById('menuName').value='';document.getElementById('menuPrice').value='';document.getElementById('menuErr').style.display='none';pendingNewRows=[];document.getElementById('newRowsList').innerHTML='';document.getElementById('newRowInput').value='';document.getElementById('compChecklist').innerHTML=COMPS.map(comp=>`<label><input type="checkbox" value="${comp.id}"> ${comp.name}</label>`).join('');document.getElementById('addMenuModal').classList.add('show');setTimeout(()=>document.getElementById('menuName').focus(),100);}
 function saveMenu(){const name=document.getElementById('menuName').value.trim(),price=parseInt(document.getElementById('menuPrice').value),cat=document.getElementById('menuCat').value;if(!name||!price){document.getElementById('menuErr').style.display='block';return;}const mid='cust_'+Date.now();const contribs=[...document.getElementById('compChecklist').querySelectorAll('input:checked')].map(el=>el.value);if(contribs.length||pendingNewRows.length){set(ref(db,'customMenuComps/'+mid),{contribs,newRows:[...pendingNewRows]});}push(ref(db,'customMenu'),{id:mid,name,price,cat});document.getElementById('addMenuModal').classList.remove('show');}
@@ -158,7 +181,7 @@ async function submitReceipt(){if(!selFile)return;const btn=document.getElementB
 function renderReceipts(){const el=document.getElementById('receiptsList');const entries=Object.entries(receipts).sort((a,b)=>(b[1].date||'').localeCompare(a[1].date||''));if(!entries.length){el.innerHTML='<div class="empty-msg">Belum ada nota</div>';return;}el.innerHTML=entries.map(([id,r])=>{const chips=r.items?.length?`<div class="r-chips">${r.items.map(i=>`<span class="r-chip">${esc(i.name)}${i.price?'  -  Rp'+esc(i.price):''}</span>`).join('')}</div>`:'';const del=role==='admin' && isManageMode ?`<button class="r-del" data-id="${id}">Hapus</button>`:'';const thumbSrc=r.thumb||r.img||'';return`<div class="receipt-item" data-id="${id}"><img class="r-thumb" src="${thumbSrc}" alt="" loading="lazy"><div style="flex:1;min-width:0"><div class="r-note">${esc(r.note||'')}</div>${chips}<div class="r-date">${r.date?new Date(r.date).toLocaleString('id'):''}  -  ${esc(r.by||'')}</div></div>${del}</div>`;}).join('');}
 function ensureAnalysisPanel(){const wrap=document.querySelector('#tab-keuangan .page-wrap');if(!wrap||document.getElementById('analysisPanel'))return;const keuGrid=wrap.querySelector('.keu-grid');const div=document.createElement('div');div.id='analysisPanel';div.className='analysis-panel';div.innerHTML=`<div class="analysis-head"><div><div class="analysis-title">Analisis Operasional</div><div style="font-size:11px;color:var(--muted2);margin-top:2px">Ringkasan dari transaksi dan nota hari ini</div></div></div><div class="analysis-body" id="analysisBody"><div class="empty-msg">Belum ada data analisis</div></div>`;keuGrid?keuGrid.insertAdjacentElement('afterend',div):wrap.prepend(div);}
 function buildLocalAnalysis(orderRows,pemasukan,pengeluaran,profit){const all=getAll(),itemMap={};let itemQty=0,dine=0,take=0,cash=0,qris=0,other=0,lastOrder=0;Object.entries(dailyOrders||{}).forEach(([txId,tx])=>{if(tx.qty!==undefined){const m=all.find(x=>x.id===txId);if(!m)return;const q=tx.qty||0;const sub=orderRows.find(r=>r.id===txId)?.total||0;itemMap[txId]={name:m.name,qty:q,total:sub};itemQty+=q;return;}const lbl=(tx.tableLabel||'').toLowerCase();if(lbl.includes('takeaway')||lbl.includes('kasir'))take++;else dine++;const pm=tx.paymentMethod||'';if(pm==='Tunai')cash+=tx.total||0;else if(pm==='QRIS')qris+=tx.total||0;else other+=tx.total||0;lastOrder=Math.max(lastOrder,tx.time||0);Object.entries(tx.items||{}).forEach(([id,data])=>{const m=all.find(x=>x.id===id);const entry=normalizeOrderEntry(data);if(!entry.qty||!m)return;if(!itemMap[id])itemMap[id]={name:m.name,qty:0,total:0};itemMap[id].qty+=entry.qty;itemMap[id].total+=calcOrderItemTotal(m,entry);itemQty+=entry.qty;});});const avg=orderRows.length?pemasukan/orderRows.length:0,margin=pemasukan?profit/pemasukan:0;const topItems=Object.values(itemMap).sort((a,b)=>b.qty-a.qty||b.total-a.total).slice(0,5);const notes=[];if(!orderRows.length)notes.push('Belum ada transaksi untuk dianalisis.');else{notes.push(`Ada <b>${orderRows.length}</b> transaksi dengan rata-rata basket <b>${rp(avg)}</b>.`);if(profit<0)notes.push('Profit negatif hari ini karena pengeluaran lebih besar dari pemasukan.');else if(margin<0.25)notes.push(`Margin masih tipis (${Math.round(margin*100)}%). Cek nota belanja atau harga item populer.`);else notes.push(`Margin sementara sehat di sekitar ${Math.round(margin*100)}%.`);if(topItems[0])notes.push(`Menu terkuat saat ini: <b>${esc(topItems[0].name)}</b> (${topItems[0].qty} porsi).`);if(lastOrder&&Date.now()-lastOrder>90*60*1000)notes.push('Belum ada order baru lebih dari 90 menit; cocok untuk dorong menu minuman/cemilan.');if(qris>cash)notes.push('QRIS lebih dominan dari tunai hari ini; pastikan rekonsiliasi pembayaran cocok dengan kas.');}return{topItems,metrics:{avg,itemQty,dine,take,cash,qris,other,margin},notes};}
-function renderAdminAnalysis(orderRows,pemasukan,pengeluaran,profit){ensureAnalysisPanel();const body=document.getElementById('analysisBody');if(!body)return;const a=buildLocalAnalysis(orderRows,pemasukan,pengeluaran,profit);body.innerHTML=`<div class="analysis-card"><div class="analysis-kicker">Menu Terlaris</div><div class="analysis-list">${a.topItems.length?a.topItems.map(i=>`<div class="analysis-row"><strong>${esc(i.name)}</strong><span>${i.qty} porsi  -  ${rp(i.total)}</span></div>`).join(''):'<div class="analysis-note">Belum ada item terjual.</div>'}</div></div><div class="analysis-card"><div class="analysis-kicker">Statistik</div><div class="analysis-list"><div class="analysis-row"><strong>Rata-rata transaksi</strong><span>${rp(a.metrics.avg)}</span></div><div class="analysis-row"><strong>Total item</strong><span>${a.metrics.itemQty} porsi</span></div><div class="analysis-row"><strong>Dine-in / Kasir</strong><span>${a.metrics.dine} / ${a.metrics.take}</span></div><div class="analysis-row"><strong>Tunai / QRIS</strong><span>${rp(a.metrics.cash)} / ${rp(a.metrics.qris)}</span></div></div></div><div class="analysis-ai" id="analysisAiText">${a.notes.map(n=>`- ${n}`).join('<br>')}</div>`;}
+function renderAdminAnalysis(orderRows,pemasukan,pengeluaran,profit){ensureAnalysisPanel();const body=document.getElementById('analysisBody');if(!body)return;const a=buildLocalAnalysis(orderRows,pemasukan,pengeluaran,profit);const groqEl=document.getElementById('groqResult');const html=`<div class="analysis-card"><div class="analysis-kicker">Menu Terlaris</div><div class="analysis-list">${a.topItems.length?a.topItems.map(i=>`<div class="analysis-row"><strong>${esc(i.name)}</strong><span>${i.qty} porsi  -  ${rp(i.total)}</span></div>`).join(''):'<div class="analysis-note">Belum ada item terjual.</div>'}</div></div><div class="analysis-card"><div class="analysis-kicker">Statistik</div><div class="analysis-list"><div class="analysis-row"><strong>Rata-rata transaksi</strong><span>${rp(a.metrics.avg)}</span></div><div class="analysis-row"><strong>Total item</strong><span>${a.metrics.itemQty} porsi</span></div><div class="analysis-row"><strong>Dine-in / Kasir</strong><span>${a.metrics.dine} / ${a.metrics.take}</span></div><div class="analysis-row"><strong>Tunai / QRIS</strong><span>${rp(a.metrics.cash)} / ${rp(a.metrics.qris)}</span></div></div></div><div class="analysis-ai" id="analysisAiText">${a.notes.map(n=>`- ${n}`).join('<br>')}</div>`;body.innerHTML=html;if(groqEl)body.appendChild(groqEl);if(typeof ensureGroqBtn==='function')ensureGroqBtn();}
 function renderKeuangan(){
 var all=getAll();let pemasukan=0;const orderRows=[];
 Object.entries(dailyOrders).forEach(([txId,tx])=>{
@@ -256,7 +279,7 @@ if(orderRows.length){
         if(confirm('Hapus transaksi order ini secara permanen? Total keuangan akan berkurang secara otomatis.')){
           removeLocalDailyOrder(curDate,btn.dataset.id);
           if(dailyOrders[btn.dataset.id])delete dailyOrders[btn.dataset.id];
-          try{const q=JSON.parse(localStorage.getItem('mula_offline_queue')||'[]').filter(job=>job.finKey!==btn.dataset.id);if(q.length)localStorage.setItem('mula_offline_queue',JSON.stringify(q));else localStorage.removeItem('mula_offline_queue');}catch(e){}
+          removeQueuedOrder(null,btn.dataset.id);
           remove(ref(db,`orders/${curDate}/${btn.dataset.id}`));
           renderKeuangan();
         }
@@ -307,17 +330,13 @@ async function completeKitchenOrder(tid){
   const completedAt=Date.now(),dateKey=t.dateKey||today(),startedAt=getKitchenStart(t),durationMs=Math.max(0,completedAt-startedAt);
   const donePayload={...t,status:'cooked_done',orderId:tid,completedAt,servedAt:completedAt,kitchenCompletedAt:completedAt,kitchenStartedAt:startedAt,durationMs,durationMinutes:Math.round(durationMs/60000)};
   removeLocalActiveOrder(tid);
-  try{const q=JSON.parse(localStorage.getItem('mula_offline_queue')||'[]').filter(job=>job.tid!==tid);if(q.length)localStorage.setItem('mula_offline_queue',JSON.stringify(q));else localStorage.removeItem('mula_offline_queue');}catch(e){}
+  await removeQueuedOrder(tid,null);
   if(tableOrders[tid])delete tableOrders[tid];
   renderActiveTables();
   let historySaved=false;
   try{await set(ref(db,`kitchenHistory/${dateKey}/${tid}`),donePayload);historySaved=true;}catch(e){console.error('Kitchen history save failed',e);}
   if(!historySaved){
-    try{
-      const q=JSON.parse(localStorage.getItem('mula_offline_queue')||'[]').filter(job=>!(job.type==='kitchen_done'&&job.tid===tid));
-      q.push({type:'kitchen_done',dateKey,tid,donePayload});
-      localStorage.setItem('mula_offline_queue',JSON.stringify(q));
-    }catch(e){}
+    await queueOfflineJob({type:'kitchen_done',dateKey,tid,donePayload});
   }
   remove(ref(db,`tableOrders/${tid}`)).catch(()=>{});
   showToast(`Order selesai - ${formatKitchenElapsed(durationMs)}`);
@@ -325,53 +344,83 @@ async function completeKitchenOrder(tid){
 function renderActiveTables(){
   const panel=document.getElementById('activeTablesPanel');if(!panel)return;
   if(!role){panel.innerHTML='';return;}
-  const active=Object.entries(tableOrders).filter(([,t])=>t.status==='active');
+  const active=Object.entries(tableOrders).filter(([,t])=>t.status==='active').sort((a,b)=>getKitchenStart(a[1])-getKitchenStart(b[1]));
   if(!active.length){panel.innerHTML=kitchenSoundEnabled?'':`<div class="pending-panel-wrap" style="margin-bottom:12px"><div class="pending-card" style="background:linear-gradient(145deg,#151515,#0f0f0f);border-color:#2b2b2b"><div class="pending-row" style="border-bottom:0"><div style="flex:1"><div class="pending-tname">Dapur Standby</div><div style="font-size:11px;color:var(--muted);margin-top:2px">Aktifkan suara sebelum service supaya order baru terdengar di HP dapur.</div></div><button class="enable-kitchen-sound-btn" style="background:var(--gold);color:#000;border:none;padding:8px 12px;border-radius:8px;font-weight:700;cursor:pointer;font-family:Outfit,sans-serif;font-size:12px">Aktifkan Suara Dapur</button></div></div></div>`;panel.querySelector('.enable-kitchen-sound-btn')?.addEventListener('click',enableKitchenSound);return;}
   ensureKitchenTimerTicker();
   panel.innerHTML=`<div class="pending-panel-wrap" style="margin-bottom:12px"><div class="pending-card" style="background:linear-gradient(145deg,#1a1a1a,#111);border-color:#333"><div class="pending-ph" style="border-bottom-color:#222"><span class="pending-ph-title" style="color:var(--gold)">Meja Aktif</span><span class="pending-badge" style="background:rgba(212,168,83,0.1);color:var(--gold);border-color:var(--gold-dim)">${active.length}</span></div>${active.map(([tid,t])=>{
-    const itemSummary=Object.entries(t.items||{}).map(([id,data])=>{
-      const menu=getAll().find(m=>m.id===id);
-      if(!menu)return `${esc(id)} x${data.qty||0}`;
-      return buildOrderLines(menu,data).map(line=>`${esc(line.name)} x${line.qty}`).join(', ');
-    }).join(', ');
     const start=getKitchenStart(t);
-    return `<div class="pending-row" style="border-bottom-color:rgba(42,42,42,0.6)"><div class="clickable-order-row" data-tid="${tid}" style="flex:1;cursor:pointer;padding:4px 0;"><div class="pending-tname">${esc(t.tableLabel||'Meja '+tid)}</div><div style="font-size:11px;color:var(--muted);margin-top:2px">${itemSummary}</div></div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px"><div class="pending-ttotal" style="font-size:15px">${rp(t.total||0)}</div><div class="kitchen-timer" data-start="${start}" style="font-family:Outfit,sans-serif;font-size:18px;font-weight:800;color:#5fa97c;letter-spacing:.5px">${formatKitchenElapsed(Date.now()-start)}</div></div><div style="display:flex;gap:6px;margin-left:12px;flex-shrink:0;flex-wrap:wrap">${!kitchenSoundEnabled?`<button class="enable-kitchen-sound-btn" style="background:rgba(95,169,124,.12);color:#8ee0ad;border:1px solid rgba(95,169,124,.35);padding:8px 12px;border-radius:8px;font-weight:700;cursor:pointer;font-family:Outfit,sans-serif;font-size:12px">Suara</button>`:''}${role==='admin' && isManageMode ?`<button class="cancel-order-btn" data-tid="${tid}" style="background:none;color:var(--red);border:1px solid #4a2020;padding:8px 12px;border-radius:8px;font-weight:600;cursor:pointer;font-family:Outfit,sans-serif;font-size:12px">Batal</button>`:''}<button class="print-lagi-btn" data-tid="${tid}" style="background:var(--surface3);color:var(--text);border:1px solid var(--border2);padding:8px 12px;border-radius:8px;font-weight:600;cursor:pointer;font-family:Outfit,sans-serif;font-size:12px">Print Lagi</button><button class="force-selesai-btn" data-tid="${tid}" style="background:var(--gold);color:#000;border:none;padding:8px 12px;border-radius:8px;font-weight:700;cursor:pointer;font-family:Outfit,sans-serif;font-size:12px">Selesai</button></div></div>`;
+    const comp=t.completedItems||{};
+    const lines=[];
+    Object.entries(t.items||{}).forEach(([id,data])=>{
+      const menu=getAll().find(m=>m.id===id);
+      if(!menu){lines.push({key:`${id}_0`,id,name:id,qty:data.qty||0,note:'',done:!!comp[`${id}_0`]});return;}
+      buildOrderLines(menu,data).forEach((l,idx)=>{
+        const key=`${id}_${idx}`;
+        lines.push({key,id,name:l.name,qty:l.qty,note:l.note||'',done:!!comp[key]});
+      });
+    });
+    const allDone=lines.length>0&&lines.every(l=>l.done);
+    const linesHTML=lines.map(l=>`<label class="kitchen-line-item" style="display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;${l.done?'opacity:0.45;text-decoration:line-through;color:var(--muted);':''}"><input type="checkbox" class="kitchen-item-check" data-tid="${tid}" data-key="${l.key}" ${l.done?'checked':''} style="accent-color:var(--gold);width:16px;height:16px;cursor:pointer;"><span style="font-size:13px;font-weight:600;color:var(--text);flex:1;">${esc(l.name)} <strong style="color:var(--gold)">x${l.qty}</strong>${l.note?`<span style="display:block;font-size:11px;color:var(--muted2);font-weight:400">Catatan: ${esc(l.note)}</span>`:''}</span></label>`).join('');
+    
+    return `<div class="pending-row" style="border-bottom-color:rgba(42,42,42,0.6);flex-direction:column;align-items:stretch;gap:8px;padding:12px 16px"><div style="display:flex;justify-content:space-between;align-items:center"><div class="pending-tname" style="font-size:15px;font-weight:700;color:var(--gold)">${esc(t.tableLabel||'Meja '+tid)}${t.customerName?` <span style="font-size:12px;color:var(--muted2);font-weight:400">(${esc(t.customerName)})</span>`:''}</div><div style="display:flex;align-items:center;gap:12px"><div class="pending-ttotal" style="font-size:14px">${rp(t.total||0)}</div><div class="kitchen-timer" data-start="${start}" style="font-family:Outfit,sans-serif;font-size:16px;font-weight:800;color:#5fa97c">${formatKitchenElapsed(Date.now()-start)}</div></div></div><div class="kitchen-items-list" style="display:flex;flex-direction:column;gap:2px;background:rgba(0,0,0,0.2);padding:8px 12px;border-radius:8px;border:1px solid rgba(255,255,255,0.05)">${linesHTML}</div><div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;margin-top:4px">${!kitchenSoundEnabled?`<button class="enable-kitchen-sound-btn" style="background:rgba(95,169,124,.12);color:#8ee0ad;border:1px solid rgba(95,169,124,.35);padding:6px 10px;border-radius:8px;font-weight:700;cursor:pointer;font-family:Outfit,sans-serif;font-size:11px">Suara</button>`:''}${role==='admin' && isManageMode ?`<button class="cancel-order-btn" data-tid="${tid}" style="background:none;color:var(--red);border:1px solid #4a2020;padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer;font-family:Outfit,sans-serif;font-size:11px">Batal</button>`:''}<button class="print-lagi-btn" data-tid="${tid}" style="background:var(--surface3);color:var(--text);border:1px solid var(--border2);padding:6px 10px;border-radius:8px;font-weight:600;cursor:pointer;font-family:Outfit,sans-serif;font-size:11px">Print Lagi</button><button class="kitchen-selesai-btn" data-tid="${tid}" style="background:var(--gold);color:#000;border:none;padding:8px 14px;border-radius:8px;font-weight:700;cursor:pointer;font-family:Outfit,sans-serif;font-size:12px">${allDone?'Selesai Semua':'Simpan / Selesai'}</button></div></div>`;
   }).join('')}</div></div>`;
+
   panel.querySelectorAll('.enable-kitchen-sound-btn').forEach(btn=>btn.addEventListener('click',enableKitchenSound));
-  panel.querySelectorAll('.clickable-order-row').forEach(row=>{
-    row.addEventListener('click',()=>{
-      const tid = row.dataset.tid;
-      const t = tableOrders[tid];
-      if(!t)return;
-      const content = Object.entries(t.items||{}).map(([id,data])=>{
-         const menu=getAll().find(m=>m.id===id);
-         if(!menu)return `<div style="padding:4px 0;border-bottom:1px solid var(--border2)">${esc(id)} <strong style="color:var(--gold);float:right">x${data.qty||0}</strong></div>`;
-         return buildOrderLines(menu,data).map(line=>`<div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border2)"><span>${esc(line.name)} <span style="font-size:12px;color:var(--muted2);display:block;margin-top:2px;">${line.note?`(${esc(line.note)})`:''}</span></span> <strong style="color:var(--gold);font-size:16px;">x${line.qty}</strong></div>`).join('');
-      }).join('');
-      document.getElementById('orderDetailContent').innerHTML = content || '<div class="empty-msg">Kosong</div>';
-      document.getElementById('orderDetailModal').classList.add('show');
+  
+  panel.querySelectorAll('.kitchen-item-check').forEach(chk=>{
+    chk.addEventListener('change',()=>{
+      const tid=chk.dataset.tid;
+      const key=chk.dataset.key;
+      if(!tableOrders[tid])return;
+      if(!tableOrders[tid].completedItems)tableOrders[tid].completedItems={};
+      if(chk.checked)tableOrders[tid].completedItems[key]=true;
+      else delete tableOrders[tid].completedItems[key];
+      update(ref(db,`tableOrders/${tid}/completedItems`),tableOrders[tid].completedItems).catch(()=>{});
+      renderActiveTables();
+      renderOrderSummary();
     });
   });
-  const closeODBtn = document.getElementById('closeOrderDetailBtn');
-  if(closeODBtn && !closeODBtn.dataset.bound){
-    closeODBtn.dataset.bound = 'true';
-    closeODBtn.addEventListener('click',()=>document.getElementById('orderDetailModal').classList.remove('show'));
-  }
+
+  panel.querySelectorAll('.kitchen-selesai-btn').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      const tid=btn.dataset.tid;
+      const t=tableOrders[tid];
+      if(!t)return;
+      const comp=t.completedItems||{};
+      const lines=[];
+      Object.entries(t.items||{}).forEach(([id,data])=>{
+        const menu=getAll().find(m=>m.id===id);
+        if(!menu){lines.push(`${id}_0`);return;}
+        buildOrderLines(menu,data).forEach((l,idx)=>lines.push(`${id}_${idx}`));
+      });
+      const checkedCount=lines.filter(k=>comp[k]).length;
+      if(checkedCount===0 || checkedCount===lines.length){
+        if(confirm('Selesaikan seluruh pesanan ini?'))completeKitchenOrder(tid);
+      }else{
+        showToast(`Pesanan parsial disimpan (${checkedCount}/${lines.length} menu selesai)`);
+        renderActiveTables();
+        renderOrderSummary();
+      }
+    });
+  });
+  
   panel.querySelectorAll('.cancel-order-btn').forEach(btn=>{
     btn.addEventListener('click',()=>{
       if(!confirm('Batalkan pesanan ini? Pesanan akan dihapus dan tidak masuk ke keuangan.'))return;
       const t=tableOrders[btn.dataset.tid];
       if(t?.financeKey)removeLocalDailyOrder(t.dateKey||today(),t.financeKey);
       removeLocalActiveOrder(btn.dataset.tid);
-      try{const q=JSON.parse(localStorage.getItem('mula_offline_queue')||'[]').filter(job=>job.tid!==btn.dataset.tid);if(q.length)localStorage.setItem('mula_offline_queue',JSON.stringify(q));else localStorage.removeItem('mula_offline_queue');}catch(e){}
+      removeQueuedOrder(btn.dataset.tid,null);
       if(t?.financeKey&&dailyOrders[t.financeKey])delete dailyOrders[t.financeKey];
       if(tableOrders[btn.dataset.tid])delete tableOrders[btn.dataset.tid];
       renderActiveTables();
+      renderOrderSummary();
       if(document.getElementById('tab-keuangan').classList.contains('active'))renderKeuangan();
       if(t?.financeKey)remove(ref(db,`orders/${t.dateKey||today()}/${t.financeKey}`));
       remove(ref(db,`tableOrders/${btn.dataset.tid}`));
     });
   });
+  
   panel.querySelectorAll('.print-lagi-btn').forEach(btn=>{
     btn.addEventListener('click',async()=>{
       const t=tableOrders[btn.dataset.tid];if(!t)return;
@@ -380,7 +429,6 @@ function renderActiveTables(){
       btn.textContent='Print Lagi';
     });
   });
-  panel.querySelectorAll('.force-selesai-btn').forEach(btn=>{btn.addEventListener('click',()=>{if(confirm('Selesaikan pesanan ini? Timer dapur akan berhenti.'))completeKitchenOrder(btn.dataset.tid);});});
 }
 // ========== QRIS PAYMENT FLOW ==========
 function renderPendingPayments(){
@@ -408,12 +456,12 @@ async function konfirmasiBayar(tableId){
   
   setLocalActiveOrder(tableId,activePayload);
   tableOrders=mergedActiveOrders(tableOrders);
-  update(ref(db,`tableOrders/${tableId}`),activePayload).catch(()=>{});
-  set(finRef, fPayload).catch(()=>{});
-  
-  const q=JSON.parse(localStorage.getItem('mula_offline_queue')||'[]');
-  q.push({type:'guest_paid',finKey,dateKey,tid:tableId,fPayload,tPayload:activePayload});
-  localStorage.setItem('mula_offline_queue',JSON.stringify(q));
+  await queueOfflineJob({type:'guest_paid',finKey,dateKey,tid:tableId,fPayload,tPayload:activePayload});
+  const paymentUpdates={};
+  paymentUpdates[`orders/${dateKey}/${finKey}`]=fPayload;
+  paymentUpdates[`tableOrders/${tableId}`]=activePayload;
+  update(ref(db),paymentUpdates).then(()=>removeQueuedOrder(tableId,finKey)).catch(()=>{});
+  syncOfflineQueue();
   
   try{await autoPrint(items,total,tableLabel);}catch(e){console.error('Print failed:',e);}
   update(ref(db,`tableOrders/${tableId}`),{printedAt:Date.now()}).catch(()=>{});
@@ -427,3 +475,69 @@ async function mergeItemsIntoDaily(dateKey,items,total,tableLabel){
 function notifyWaitingVerification(){const waiting=Object.entries(tableOrders).filter(([,t])=>t.status==='waiting_verification');if(waiting.length)document.title=`MULA (${waiting.length} bayar)`;waiting.forEach(([tid,t])=>{const key=`${tid}:${t.claimedPaidAt||t.createdAt||0}`;if(paymentAlertSeen.has(key))return;paymentAlertSeen.add(key);try{const ctx=new(window.AudioContext||window.webkitAudioContext)();const osc=ctx.createOscillator();const gain=ctx.createGain();osc.type='sine';osc.frequency.value=880;gain.gain.setValueAtTime(0.0001,ctx.currentTime);gain.gain.exponentialRampToValueAtTime(0.12,ctx.currentTime+0.01);gain.gain.exponentialRampToValueAtTime(0.0001,ctx.currentTime+0.28);osc.connect(gain);gain.connect(ctx.destination);osc.start();osc.stop(ctx.currentTime+0.3);}catch(e){};});}
 function nativePrinterOnly(){try{return !!window.MulaPrinter?.nativeOnlyMode?.();}catch(e){return false;}}
 function nativePrinterError(){try{return window.MulaPrinter?.lastError?.()||'Printer native gagal';}catch(e){return 'Printer native gagal';}}
+
+function renderRangkuman(){
+  const all=getAll();
+  // Aggregate qty and revenue per menu item across all transactions today
+  const itemMap={};
+  Object.values(dailyOrders).forEach(tx=>{
+    if(tx.qty!==undefined){
+      // Legacy flat format
+      const m=all.find(x=>x.id===Object.keys(dailyOrders).find(k=>dailyOrders[k]===tx));
+      return;
+    }
+    Object.entries(tx.items||{}).forEach(([iid,idata])=>{
+      const m=all.find(x=>x.id===iid);if(!m)return;
+      const lines=buildOrderLines(m,idata);
+      lines.forEach(line=>{
+        const key=iid+'|'+line.name;
+        if(!itemMap[key])itemMap[key]={id:iid,name:line.name,qty:0,revenue:0,price:line.price||m.price||0};
+        itemMap[key].qty+=line.qty||0;
+        itemMap[key].revenue+=(line.price||m.price||0)*(line.qty||0);
+      });
+    });
+  });
+
+  const items=Object.values(itemMap).sort((a,b)=>b.qty-a.qty);
+  const totalQty=items.reduce((s,i)=>s+i.qty,0);
+  const totalJenis=items.length;
+  const top=items[0];
+
+  const rkTotalQty=document.getElementById('rkTotalQty');
+  const rkTotalJenis=document.getElementById('rkTotalJenis');
+  const rkTopMenu=document.getElementById('rkTopMenu');
+  const rkMenuList=document.getElementById('rkMenuList');
+  if(!rkMenuList)return;
+
+  if(rkTotalQty)rkTotalQty.textContent=totalQty+' pcs';
+  if(rkTotalJenis)rkTotalJenis.textContent=totalJenis+' menu';
+  if(rkTopMenu)rkTopMenu.textContent=top?`${top.name} (${top.qty})`:'-';
+
+  if(!items.length){
+    rkMenuList.innerHTML='<div class="empty-msg">Belum ada order hari ini</div>';
+    return;
+  }
+
+  const maxQty=top?top.qty:1;
+  rkMenuList.innerHTML=items.map((item,idx)=>{
+    const pct=Math.round((item.qty/maxQty)*100);
+    const rankColor=idx===0?'var(--gold)':idx===1?'#aaa':idx===2?'#cd7f32':'var(--muted2)';
+    const rankEmoji=idx===0?'🥇':idx===1?'🥈':idx===2?'🥉':'';
+    return `<div style="padding:12px 14px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:6px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
+          <span style="font-size:16px;width:24px;text-align:center;flex-shrink:0">${rankEmoji||'<span style="font-size:11px;color:var(--muted2);font-weight:700">#'+(idx+1)+'</span>'}</span>
+          <span style="font-weight:600;color:var(--text);font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.name)}</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;flex-shrink:0">
+          <span style="font-size:18px;font-weight:800;color:${rankColor};font-family:'Playfair Display',serif">${item.qty}</span>
+          <span style="font-size:11px;color:var(--muted2)">pcs</span>
+          <span style="font-size:13px;font-weight:700;color:var(--green)">${rp(item.revenue)}</span>
+        </div>
+      </div>
+      <div style="height:6px;background:var(--surface3);border-radius:99px;overflow:hidden">
+        <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,${rankColor},${rankColor}88);border-radius:99px;transition:width 0.4s ease"></div>
+      </div>
+    </div>`;
+  }).join('');
+}

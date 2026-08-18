@@ -66,7 +66,9 @@ class MainActivity : AppCompatActivity() {
             settings.domStorageEnabled = true
             settings.useWideViewPort = true
             settings.setSupportZoom(false)
-            settings.cacheMode = WebSettings.LOAD_NO_CACHE
+            // Reuse WebView assets between launches. The app_v query changes only
+            // when the APK version changes, so normal launches stay fast.
+            settings.cacheMode = WebSettings.LOAD_DEFAULT
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             addJavascriptInterface(printerBridge, "MulaPrinter")
         }
@@ -77,14 +79,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun hardReload() {
-        binding.webView.clearCache(true)
         binding.webView.loadUrl(cacheBustedUrl())
     }
 
     private fun cacheBustedUrl(): String {
         val base = getPrefs().getString(PREF_URL, DEFAULT_URL) ?: DEFAULT_URL
         val separator = if (base.contains("?")) "&" else "?"
-        return "${base}${separator}app_v=${APP_WEB_VERSION}&t=${System.currentTimeMillis()}"
+        return "${base}${separator}app_v=${APP_WEB_VERSION}"
     }
 
     private fun enforceFreshWebUi(view: WebView) {
@@ -94,18 +95,10 @@ class MainActivity : AppCompatActivity() {
               try{
                 localStorage.setItem('mula_theme','dark');
                 document.documentElement.classList.remove('light-mode');
+                document.documentElement.classList.add('android-webview');
+                if(document.body)document.body.classList.add('android-lite');
                 var b=document.getElementById('themeToggle');
                 if(b)b.textContent='Light';
-                if('serviceWorker' in navigator){
-                  navigator.serviceWorker.getRegistrations().then(function(rs){
-                    rs.forEach(function(r){ r.unregister(); });
-                  });
-                }
-                if(window.caches){
-                  caches.keys().then(function(keys){
-                    keys.forEach(function(k){ caches.delete(k); });
-                  });
-                }
               }catch(e){}
             })();
             """.trimIndent(),
@@ -211,6 +204,12 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val PREF_URL = "cashier_url"
         private const val DEFAULT_URL = "https://mula-eatery.web.app/"
-        private const val APP_WEB_VERSION = 28
+        private const val APP_WEB_VERSION = 127
     }
 }
+
+
+
+
+
+

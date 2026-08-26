@@ -2,7 +2,7 @@
 var role=null,curDate=today(),orders={},stock={},receipts={},customMenu={},prices={},customMenuComps={},menuAvailability={},pendingNewRows=[],selFile=null,syncT=null,editPriceId=null,isManageMode=false;
 var unsubOrders=null,unsubStock=null,unsubReceipts=null,unsubCustom=null,unsubPrices=null,unsubCustomComps=null,unsubMenuAvailability=null;
 var curTable=null,tableOrders={},dailyOrders={},unsubTableOrder=null,unsubAllTables=null;
-var liveTableSlices={active:{},waiting:{},paid:{}};
+var liveTableSlices={active:{},waiting:{},paid:{},pending:{}};
 var outboxFinKeys=new Set(),outboxDbPromise=null;
 var customReady=false,pricesReady=false,renderScheduled=false,tableRenderScheduled=false;
 var paymentAlertSeen=new Set();
@@ -348,10 +348,10 @@ unsubCustomComps=onValue(ref(db,'customMenuComps'),s=>{customMenuComps=s.val()||
 if(unsubMenuAvailability)unsubMenuAvailability();
 unsubMenuAvailability=onValue(ref(db,'menuAvailability'),s=>{menuAvailability=s.val()||{};writeLocalCache('menuAvailability',menuAvailability);if(customReady&&pricesReady)scheduleRender();});
 if(unsubAllTables)unsubAllTables();
-liveTableSlices={active:{},waiting:{},paid:{}};
+liveTableSlices={active:{},waiting:{},paid:{},pending:{}};
 const tableStatusRef=(status)=>{const r=ref(db,'tableOrders');return typeof DEMO_MODE!=='undefined'&&DEMO_MODE?r:r.orderByChild('status').equalTo(status);};
-const refreshTableSlices=()=>{tableOrders=mergedActiveOrders(Object.assign({},liveTableSlices.active,liveTableSlices.waiting,liveTableSlices.paid));notifyWaitingVerification();notifyActiveKitchenOrders();if(tableRenderScheduled)return;tableRenderScheduled=true;requestAnimationFrame(()=>{tableRenderScheduled=false;renderPendingOrders();renderActiveTables();renderPendingPayments();if(customReady&&pricesReady)scheduleRender();});};
-const unsubs=[['active',tableStatusRef('active')],['waiting',tableStatusRef('waiting_verification')],['paid',tableStatusRef('paid')]].map(([name,queryRef])=>onValue(queryRef,s=>{liveTableSlices[name]=s.val()||{};refreshTableSlices();}));
+const refreshTableSlices=()=>{tableOrders=mergedActiveOrders(Object.assign({},liveTableSlices.active,liveTableSlices.waiting,liveTableSlices.paid,liveTableSlices.pending));notifyWaitingVerification();notifyActiveKitchenOrders();if(tableRenderScheduled)return;tableRenderScheduled=true;requestAnimationFrame(()=>{tableRenderScheduled=false;renderPendingOrders();renderActiveTables();renderPendingPayments();if(customReady&&pricesReady)scheduleRender();});};
+const unsubs=[['active',tableStatusRef('active')],['waiting',tableStatusRef('waiting_verification')],['paid',tableStatusRef('paid')],['pending',tableStatusRef('pending_payment')]].map(([name,queryRef])=>onValue(queryRef,s=>{liveTableSlices[name]=s.val()||{};refreshTableSlices();}));
 unsubAllTables=()=>unsubs.forEach(unsub=>{try{unsub&&unsub();}catch(e){}});
 onValue(ref(db, '.info/connected'), (snap) => {
   if (snap.val() === true) { setSync('green'); syncOfflineQueue(); } else { setSync('red'); }

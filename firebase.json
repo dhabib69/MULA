@@ -8,16 +8,24 @@
       "firebase.json",
       "**/.*",
       "node_modules/**",
-      "android-cashier/**",
-      "dist/**",
       "functions/**",
+      "android-cashier/**",
+      "**/*.apk",
+      "*.apk",
+      "dist/**",
       "server.js",
+      "migrate_orders.js",
+      "netlify.toml",
       "package.json",
       "package-lock.json",
       "demo-state.json",
+      "**/*.bat",
+      "**/*.cmd",
+      "**/*.dll",
+      "**/*.exe",
+      "**/*.msi",
       "*.srt",
       "*.pdf",
-      "*.apk",
       "orders*.json",
       "tableOrders*.json",
       "temp_script_*",
@@ -27,7 +35,21 @@
       "extracted.txt",
       "jsdom_logs.txt",
       "test_jsdom*",
+      "test_syntax.js",
+      "MULA1.png",
+      "MULA2.png",
+      "MULA3.png",
       "firebase-debug.log"
+    ],
+    "headers": [
+      {
+        "source": "/downloads/version.json",
+        "headers": [{"key": "Cache-Control", "value": "no-cache, no-store, must-revalidate"}]
+      },
+      {
+        "source": "/downloads/*.apk",
+        "headers": [{"key": "Cache-Control", "value": "public,max-age=31536000,immutable"}]
+      }
     ],
     "rewrites": [
       {

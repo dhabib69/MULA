@@ -204,7 +204,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val PREF_URL = "cashier_url"
         private const val DEFAULT_URL = "https://mula-eatery.web.app/"
-        private const val APP_WEB_VERSION = 127
+        private const val APP_WEB_VERSION = 128
     }
 }
 

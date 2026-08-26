@@ -7,6 +7,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.WindowManager
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
@@ -22,6 +24,7 @@ import com.mula.cashier.databinding.ActivityMainBinding
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var printerBridge: PrinterBridge
+    private lateinit var appUpdateManager: AppUpdateManager
 
     private val btPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -38,6 +41,7 @@ class MainActivity : AppCompatActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         printerBridge = PrinterBridge(this)
+        appUpdateManager = AppUpdateManager(this)
         setupWebView()
         binding.toolsButton.setOnClickListener { showToolsMenu() }
         ensureBluetoothPermission()
@@ -45,6 +49,12 @@ class MainActivity : AppCompatActivity() {
         startKitchenAlertService()
         refreshPrinterStatus()
         loadConfiguredUrl()
+        Handler(Looper.getMainLooper()).postDelayed({ appUpdateManager.checkForUpdate() }, 4000)
+    }
+
+    override fun onDestroy() {
+        appUpdateManager.close()
+        super.onDestroy()
     }
 
     override fun onResume() {
@@ -204,7 +214,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val PREF_URL = "cashier_url"
         private const val DEFAULT_URL = "https://mula-eatery.web.app/"
-        private const val APP_WEB_VERSION = 128
+        private const val APP_WEB_VERSION = 129
     }
 }
 

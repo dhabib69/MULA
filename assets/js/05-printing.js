@@ -1,24 +1,35 @@
 // Native/Web Bluetooth/browser print paths and ESC/POS receipt generation
-async function autoPrint(items,total,tableLabel,cashGiven,change){
+async function autoPrint(items,total,tableLabel,cashGiven,change,customerName=''){tableLabel=typeof displayOrderLabel==='function'?displayOrderLabel(tableLabel):tableLabel;
   const all=getAll();
-  const orderItems=all.filter(i=>(items[i.id]?.qty||0)>0);
-  if(!orderItems.length)return;
-  const printItems=orderItems.flatMap(i=>buildOrderLines(i,items[i.id]).map(line=>({name:line.name,qty:line.qty,price:rp(line.total),note:line.note||''})));
+  const byId=Object.fromEntries(all.map(i=>[i.id,i]));
+  const printItems=[];
+  Object.entries(items||{}).forEach(([id,data])=>{
+    const entry=normalizeOrderEntry(data);
+    if(!entry.qty)return;
+    const menu=byId[id];
+    if(menu){
+      buildOrderLines(menu,entry).forEach(line=>printItems.push({name:line.name,qty:line.qty,price:rp(line.total),note:line.note||''}));
+      return;
+    }
+    const fallbackTotal=data?.total||data?.rawTotal||((data?.price||data?.rawPrice||0)*entry.qty);
+    printItems.push({name:data?.name||data?.menuName||id,qty:entry.qty,price:fallbackTotal?rp(fallbackTotal):'',note:entry.note||''});
+  });
+  if(!printItems.length)return;
   const now=new Date();
   const tStr=now.toLocaleTimeString('id',{hour:'2-digit',minute:'2-digit'});
   const dStr=fmtDateFull(today());
   // Try native Android bridge first (MulaPrinter in WebView app)
   if(window.MulaPrinter?.printBase64){
     try{
-      const data=await buildReceipt(printItems,total,dStr,tStr,tableLabel,cashGiven,change);
+      const data=await buildReceipt(printItems,total,dStr,tStr,tableLabel,cashGiven,change,customerName);
       const ok=await window.MulaPrinter.printBase64(bytesToBase64(data));
       if(ok!==false)return;
     }catch(e){console.warn('MulaPrinter failed',e);}
   }
   // Fallback: window.print() (works in browser, not in WebView)
-  fallbackPrint(printItems,total,dStr,tStr,tableLabel,cashGiven,change);
+  fallbackPrint(printItems,total,dStr,tStr,tableLabel,cashGiven,change,customerName);
 }
-function fallbackPrint(items,total,dStr,tStr,tableLabel,cashGiven,change){
+function fallbackPrint(items,total,dStr,tStr,tableLabel,cashGiven,change,customerName=''){
   let rows='';
   items.forEach((i,idx)=>{
     const isLast=idx===items.length-1;
@@ -31,11 +42,11 @@ function fallbackPrint(items,total,dStr,tStr,tableLabel,cashGiven,change){
   if(cashGiven){
     cashStr=`<hr class="rp-divider"><div class="rp-total" style="font-size:10pt"><span>Uang Tunai</span><span>${rp(cashGiven)}</span></div><div class="rp-total" style="font-size:10pt"><span>Kembali</span><span>${rp(change)}</span></div>`;
   }
-  document.getElementById('printArea').innerHTML=`<div class="receipt-print"><div class="rp-center"><div class="rp-logo">MULA</div><div class="rp-sub">Eatery</div>${tableLabel?`<div class="rp-sub">${tableLabel}</div>`:''}<div class="rp-sub">${dStr} · ${tStr}</div></div><hr class="rp-divider">${rows}<hr class="rp-divider"><div class="rp-total"><span>TOTAL</span><span>${rp(total)}</span></div>${cashStr}<hr class="rp-divider"><div class="rp-center rp-sub" style="margin-top:2mm">Terima kasih!</div></div>`;
+  document.getElementById('printArea').innerHTML=`<div class="receipt-print"><div class="rp-center"><div class="rp-logo">MULA</div><div class="rp-sub">Eatery</div>${tableLabel?`<div class="rp-sub">${tableLabel}</div>`:''}${customerName?`<div class="rp-sub" style="font-weight:bold">Pelanggan: ${esc(customerName)}</div>`:''}<div class="rp-sub">${dStr} · ${tStr}</div></div><hr class="rp-divider">${rows}<hr class="rp-divider"><div class="rp-total"><span>TOTAL</span><span>${rp(total)}</span></div>${cashStr}<hr class="rp-divider"><div class="rp-center rp-sub" style="margin-top:2mm">Terima kasih!</div></div>`;
   setTimeout(()=>window.print(),100);
 }
 function openQrModal(){
-  if(typeof QRCode==='undefined'){alert('QR library belum siap, coba lagi');return;}
+  if(typeof QRCode==='undefined'){mulaAlert('QR library belum siap, coba lagi');return;}
   document.getElementById('qrModal').classList.add('show');
   const grid=document.getElementById('qrGrid');grid.innerHTML='';
   TABLE_IDS.forEach(id=>{
@@ -48,7 +59,7 @@ function openQrModal(){
     div.addEventListener('click',()=>{
       const img=qrHolder.querySelector('img')||qrHolder.querySelector('canvas');
       const src=img?.src||(img?.toDataURL?img.toDataURL():'');
-      if(!src){alert('QR belum siap');return;}
+      if(!src){mulaAlert('QR belum siap');return;}
       document.getElementById('printArea').innerHTML=`<div style="text-align:center;padding:10mm;font-family:'Outfit',sans-serif;color:#000"><div style="font-size:22pt;font-weight:bold;letter-spacing:6px">MULA</div><div style="font-size:9pt;letter-spacing:3px;margin-bottom:4mm;color:#555">EATERY</div><div style="font-size:14pt;font-weight:bold;margin-bottom:4mm">Meja ${id}</div><img src="${src}" style="width:60mm;height:60mm"><div style="font-size:9pt;margin-top:4mm">Scan untuk lihat pesanan &amp; bayar</div><div style="font-size:7pt;color:#888;margin-top:2mm;word-break:break-all">${url}</div></div>`;
       setTimeout(()=>window.print(),100);
     });
@@ -67,7 +78,7 @@ function concatBytes(...arrays){
 async function loadLogoBytes() {
   return new Uint8Array(0);
 }
-async function buildReceipt(items,total,dStr,tStr,tableLabel,cashGiven,change){
+async function buildReceipt(items,total,dStr,tStr,tableLabel,cashGiven,change,customerName=''){
   const ESC=0x1B,GS=0x1D;
   const INIT=escCmd(ESC,0x40);
   const CENTER=escCmd(ESC,0x61,0x01);
@@ -90,6 +101,7 @@ async function buildReceipt(items,total,dStr,tStr,tableLabel,cashGiven,change){
     parts.push(BOLD_ON,BIG,escText('MULA\n'),BOLD_OFF,NORMAL,escText('Eatery\n'));
   }
   if(tableLabel)parts.push(escText(tableLabel+'\n'));
+  if(customerName)parts.push(BOLD_ON,escText('Pelanggan: '+customerName+'\n'),BOLD_OFF);
   parts.push(escText(dStr+' '+tStr+'\n'),LEFT,DASH);
   items.forEach((i,idx)=>{
     parts.push(line(i.name.substring(0,26),'x'+i.qty));
@@ -114,7 +126,7 @@ var BLE_SERVICES=[
 ];
 
 async function connectPrinter(){
-  if(!navigator.bluetooth){alert('Web Bluetooth tidak didukung. Gunakan Chrome Android.');return false;}
+  if(!navigator.bluetooth){mulaAlert('Web Bluetooth tidak didukung. Gunakan Chrome Android.');return false;}
   try{
     const opts={acceptAllDevices:true,optionalServices:BLE_SERVICES.map(x=>x.s)};
     btDevice=await navigator.bluetooth.requestDevice(opts);
@@ -126,10 +138,10 @@ async function connectPrinter(){
         return true;
       }catch(e){}
     }
-    alert('Printer terhubung tapi karakteristik tidak ditemukan. Coba printer lain.');
+    mulaAlert('Printer terhubung tapi karakteristik tidak ditemukan. Coba printer lain.');
     return false;
   }catch(e){
-    if(e.name!=='NotFoundError')alert('Gagal connect: '+e.message);
+    if(e.name!=='NotFoundError')mulaAlert('Gagal connect: '+e.message);
     return false;
   }
 }
@@ -145,7 +157,7 @@ async function sendToPrinter(data){
 document.getElementById('printBtn').addEventListener('click',async()=>{
   const all=getAll();
   const orderItems=all.filter(i=>(orders[i.id]?.qty||0)>0);
-  if(!orderItems.length){alert('Belum ada order');return;}
+  if(!orderItems.length){mulaAlert('Belum ada order');return;}
   
   // Also show print preview as fallback
   let total=0;
@@ -164,10 +176,10 @@ document.getElementById('printBtn').addEventListener('click',async()=>{
       const ok=await window.MulaPrinter.printBase64(bytesToBase64(data));
       btn.textContent=origText;
       if(ok!==false)return;
-      if(nativePrinterOnly()){alert(nativePrinterError());return;}
+      if(nativePrinterOnly()){mulaAlert(nativePrinterError());return;}
     }catch(e){
       btn.textContent=origText;
-      if(nativePrinterOnly()){alert(e?.message||nativePrinterError());return;}
+      if(nativePrinterOnly()){mulaAlert(e?.message||nativePrinterError());return;}
       console.warn('Native print bridge failed, trying browser path',e);
     }
   }

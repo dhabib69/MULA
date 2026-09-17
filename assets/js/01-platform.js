@@ -36,7 +36,7 @@ if (fbAuth) fbAuth.onAuthStateChanged(user => {
     if(pwInp) pwInp.placeholder = 'Masukkan PIN Admin';
     // Firebase LOCAL persistence restores the admin session after a reload.
     // Enter automatically so mobile users are not left on the role screen.
-    if(typeof enterApp==='function' && role!=='admin') enterApp('admin');
+    if(typeof handleRestoredStaffSession==='function') handleRestoredStaffSession(user);
   } else if (!user) {
     Promise.resolve(typeof authPersistenceReady==='undefined'?true:authPersistenceReady)
       .then(()=>fbAuth.signInAnonymously())
@@ -131,14 +131,14 @@ async function remove(r){if(!DEMO_MODE)return fbRemove(r);return dWrite('remove'
 function push(r,v){if(!DEMO_MODE)return fbPush(r,v);const key=`p_${Date.now()}_${Math.random().toString(36).slice(2,8)}`;const child={path:`${dPath(r.path)}/${key}`,key};if(arguments.length>1)dWrite('set',child.path,v);return child;}
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 var PASS=typeof ADMIN_PASS==='string'?ADMIN_PASS:'';
-var TABLE_IDS=['1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','18','19','20'];
+var TABLE_IDS=['1','2','3','4','5','6','7','21','22','23','24','25','26','27','28'];
 var APP_URL=location.origin;
 function tableUrl(id){return `${location.origin}/table${id}`;}
 function getTableParamFromUrl(){
   const params=new URLSearchParams(location.search);
   const parseTableValue=(v)=>{
     const raw=String(v||'').trim();
-    const m=raw.match(/^(?:table|meja)?\s*([1-9]|1[0-9]|20)$/i);
+    const m=raw.match(/^(?:table|meja)?\s*([1-7]|2[1-8])$/i);
     return m?m[1]:null;
   };
   const queryTable=parseTableValue(params.get('table'))||parseTableValue(params.get('meja'));
@@ -148,9 +148,9 @@ function getTableParamFromUrl(){
     if(legacyT)return legacyT;
   }
   const path=location.pathname.replace(/\/+$/,'');
-  const match=path.match(/(?:^|\/)(?:table|meja|selfcheckout|guest)[-/]?([1-9]|1[0-9]|20)$/i);
+  const match=path.match(/(?:^|\/)(?:table|meja|selfcheckout|guest)[-/]?([1-7]|2[1-8])$/i);
   if(match)return match[1];
-  const hashMatch=location.hash.match(/(?:table|meja|selfcheckout|guest)[-/]?([1-9]|1[0-9]|20)/i);
+  const hashMatch=location.hash.match(/(?:table|meja|selfcheckout|guest)[-/]?([1-7]|2[1-8])/i);
   if(hashMatch)return hashMatch[1];
   return null;
 }

@@ -74,6 +74,21 @@ class PrinterBridge(private val activity: Activity) {
     @JavascriptInterface
     fun lastError(): String = lastError
 
+    @JavascriptInterface
+    fun vibrate(durationMs: Long) {
+        try {
+            val vibrator = activity.getSystemService(Context.VIBRATOR_SERVICE) as? android.os.Vibrator
+            if (vibrator?.hasVibrator() == true) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    vibrator.vibrate(android.os.VibrationEffect.createOneShot(durationMs, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+                } else {
+                    @Suppress("DEPRECATION")
+                    vibrator.vibrate(durationMs)
+                }
+            }
+        } catch (e: Exception) {}
+    }
+
     @SuppressLint("MissingPermission")
     fun getPairedPrinters(): List<PrinterSummary> {
         val bonded = adapter?.bondedDevices ?: emptySet()

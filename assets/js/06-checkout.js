@@ -35,9 +35,10 @@
   .osm-method-btn.active{background:rgba(212,168,83,0.15);border-color:var(--gold);color:var(--gold);font-weight:700;}
   .osm-dest-box{padding:14px 20px 0;border-top:1px solid var(--border,#333);}
   .osm-dest-label{font-size:11px;color:var(--muted2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.7px;}
-  .osm-dest-row{display:flex;gap:7px;overflow-x:auto;padding-bottom:3px;scrollbar-width:none;}
-  .osm-dest-btn{background:var(--surface3);border:1px solid var(--border2);color:var(--muted2);padding:7px 11px;border-radius:999px;font-size:12px;white-space:nowrap;cursor:pointer;font-family:Outfit,sans-serif;}
+  .osm-dest-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(48px,1fr));gap:6px;overflow:visible;padding-bottom:0;}
+  .osm-dest-btn{background:var(--surface3);border:1px solid var(--border2);color:var(--muted2);min-width:0;width:100%;padding:7px 3px;border-radius:999px;font-size:10px;white-space:nowrap;cursor:pointer;font-family:Outfit,sans-serif;}
   .osm-dest-btn.active{background:rgba(212,168,83,.16);border-color:var(--gold-dim);color:var(--gold);font-weight:700;}
+   .osm-customer-box{padding:14px 20px 16px;border-top:1px solid var(--border,#333);}.osm-customer-label{font-size:11px;color:var(--muted2);margin-bottom:8px;text-transform:uppercase;letter-spacing:.7px;display:flex;justify-content:space-between;gap:8px;}.osm-customer-label small{font-size:10px;text-transform:none;letter-spacing:0;}.osm-customer-input{display:block;width:100%;box-sizing:border-box;background:var(--surface3);border:1px solid var(--border2);color:var(--text);padding:10px 12px;border-radius:9px;font:14px Outfit,sans-serif;outline:none;}.osm-customer-input:focus{border-color:var(--gold-dim);box-shadow:0 0 0 3px rgba(212,168,83,.1);}
   .osm-actions{display:flex;gap:10px;}
   .osm-actions .btn-primary{flex:2;padding:12px;font-size:15px;font-weight:700;}
   .osm-actions .btn-secondary{flex:1;padding:12px;font-size:15px;}
@@ -52,9 +53,13 @@
     <div class="osm-dest-box">
       <div class="osm-dest-label">Tujuan Order</div>
       <div class="osm-dest-row" id="osmDestRow">
-        <button class="osm-dest-btn active" data-dest="takeaway">Takeaway</button>
+        <button class="osm-dest-btn active" data-dest="takeaway">Bungkus</button>
         ${TABLE_IDS.map(id=>`<button class="osm-dest-btn" data-dest="table-${id}">Meja ${id}</button>`).join('')}
       </div>
+    </div>
+    <div class="osm-customer-box">
+      <label class="osm-customer-label" for="osmCustomerName"><span>Nama Pelanggan</span><small>opsional</small></label>
+      <input id="osmCustomerName" class="osm-customer-input" type="text" maxlength="60" autocomplete="name" placeholder="Masukkan nama pelanggan">
     </div>
     <div class="osm-foot">
       <div class="osm-total"><span class="osm-total-lbl">Total</span><span class="osm-total-val" id="osmTotal"></span></div>
@@ -118,7 +123,8 @@ document.getElementById('prosesManualBtn').addEventListener('click',()=>{
   const tunaiRow=document.getElementById('osmTunaiRow');
   const kembaliRow=document.getElementById('osmKembaliRow');
   const fastCash=document.getElementById('osmFastCash');
-  tunaiInp.value=''; kembalianEl.textContent='Rp 0';
+   const customerInp=document.getElementById('osmCustomerName');
+   tunaiInp.value=''; customerInp.value=''; kembalianEl.textContent='Rp 0';
   
   // Reset method to Tunai on each open
   document.querySelectorAll('.osm-method-btn').forEach(b=>b.classList.remove('active'));
@@ -179,6 +185,7 @@ document.getElementById('prosesManualBtn').addEventListener('click',()=>{
     const paymentMethod=getMethod();
     const cashGiven=paymentMethod==='Tunai'?(parseInt(tunaiInp.value)||0):0;
     const change=Math.max(0,cashGiven-total);
+     const customerName=customerInp.value.trim().replace(/\s+/g,' ').slice(0,60);
     
     newBtn.disabled=true;
     newBtn.textContent='Memproses...';
@@ -191,8 +198,8 @@ document.getElementById('prosesManualBtn').addEventListener('click',()=>{
       const finRef=push(ref(db,`orders/${curDate}`));
       const finKey=finRef.key||finRef.path?.split('/').pop();
       const createdAt=Date.now();
-      const fPayload={time:createdAt,tableLabel:dest.label,total,cashGiven,change,paymentMethod,items:dbItems,orderSource:dest.kind};
-      const tPayload={status:'active',items:dbItems,total,cashGiven,change,paymentMethod,tableLabel:dest.label,tableId:dest.tableId||null,orderSource:dest.kind,createdAt,kitchenQueuedAt:createdAt,dateKey:curDate,financeKey:finKey};
+       const fPayload={time:createdAt,createdAt,createdBy:currentUser?.uid||'',tableLabel:dest.label,customerName,total,cashGiven,change,paymentMethod,items:dbItems,orderSource:dest.kind};
+       const tPayload={status:'active',items:dbItems,total,cashGiven,change,paymentMethod,customerName,tableLabel:dest.label,tableId:dest.tableId||null,orderSource:dest.kind,createdAt,kitchenQueuedAt:createdAt,dateKey:curDate,financeKey:finKey};
       setLocalDailyOrder(curDate,finKey,fPayload);
       setLocalActiveOrder(tid,tPayload);
       dailyOrders=mergedDailyOrders(curDate,dailyOrders);
@@ -205,7 +212,7 @@ document.getElementById('prosesManualBtn').addEventListener('click',()=>{
       q.push({type:'kasir',finKey,dateKey:curDate,tid,fPayload,tPayload});
       localStorage.setItem('mula_offline_queue',JSON.stringify(q));
       
-      try{await autoPrint(dbItems,total,dest.label,cashGiven,change);}catch(e){}
+       try{await autoPrint(dbItems,total,displayOrderLabel(dest.label),cashGiven,change,customerName);}catch(e){}
       orders={};renderOrders();
       renderActiveTables();
       if(document.getElementById('tab-keuangan').classList.contains('active'))renderKeuangan();
@@ -235,22 +242,19 @@ document.getElementById('manageToggleBtn').addEventListener('click',function(){
   if(document.getElementById('tab-keuangan').classList.contains('active'))renderKeuangan();
 });
 function filterMenu(q){
-  if(!q){
-    document.querySelectorAll('.menu-item').forEach(el=>el.classList.remove('hidden'));
-    document.querySelectorAll('.section-div').forEach(el=>el.classList.remove('hidden'));
-    document.querySelectorAll('.menu-grid').forEach(el=>el.classList.remove('hidden'));
-    return;
-  }
-  document.querySelectorAll('.section-div').forEach(sec=>{
-    let hasVisible=false;
-    const grid=sec.nextElementSibling;
-    if(!grid||!grid.classList.contains('menu-grid'))return;
-    grid.querySelectorAll('.menu-item').forEach(el=>{
-      const name=el.querySelector('.item-name')?.textContent.toLowerCase()||'';
-      if(name.includes(q)){el.classList.remove('hidden');hasVisible=true;}
-      else el.classList.add('hidden');
+  const str=(q||'').trim().toLowerCase();
+  const menuList=document.getElementById('menuList');if(!menuList)return;
+  menuList.querySelectorAll('.menu-grid').forEach(grid=>{
+    const sectionHead=document.getElementById('sec-'+grid.dataset.section);
+    let count=0;
+    grid.querySelectorAll('.menu-item').forEach(item=>{
+      const match=!str||(item.dataset.name||'').toLowerCase().includes(str);
+      item.classList.remove('hidden');
+      item.style.display=match?'':'none';
+      if(match)count++;
     });
-    sec.classList.toggle('hidden',!hasVisible);
-    grid.classList.toggle('hidden',!hasVisible);
+    const show=!str||count>0;
+    if(sectionHead){sectionHead.classList.remove('hidden');sectionHead.style.display=show?'':'none';}
+    grid.classList.remove('hidden');grid.style.display=show?'':'none';
   });
 }

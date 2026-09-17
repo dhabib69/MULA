@@ -31,191 +31,6 @@ function formatCompactCurrency(val){
   return val.toLocaleString('id');
 }
 
-// Aggregate items from a Firebase orders snapshot into a map
-function _aggregateItems(ordersSnap, itemMap, all){
-  const orders = ordersSnap || {};
-  Object.entries(orders).forEach(([k,tx])=>{
-    if(k==='receipts') return;
-    if(tx.qty!==undefined) return; // legacy
-    Object.entries(tx.items||{}).forEach(([iid,idata])=>{
-      const m=all.find(x=>x.id===iid); if(!m) return;
-      const lines=typeof buildOrderLines==='function'?buildOrderLines(m,idata):[];
-      lines.forEach(line=>{
-        const key=iid+'|'+line.name;
-        if(!itemMap[key]) itemMap[key]={name:line.name,qty:0,revenue:0};
-        itemMap[key].qty += line.qty||0;
-        itemMap[key].revenue += (line.price||m.price||0)*(line.qty||0);
-      });
-    });
-  });
-}
-
-// --- Gather all data (fully parallelised with Promise.all) ---
-async function gatherAnalysisData(viewYear, viewMonth){
-  const all = getAll();
-  const now = new Date();
-  const year  = (viewYear  !== undefined && viewYear  !== null) ? viewYear  : now.getFullYear();
-  const month = (viewMonth !== undefined && viewMonth !== null) ? viewMonth : now.getMonth();
-  const todayStr = today();
-  const viewingCurrentMonth = (year === now.getFullYear() && month === now.getMonth());
-
-  // --- Build all day-keys we need in one shot ---
-  // 90-day history (for projection stats, always from today backwards)
-  const historyDays = [];
-  for(let i=0;i<90;i++){
-    const d=new Date(now); d.setDate(now.getDate()-i);
-    historyDays.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`);
-  }
-
-  // Current week
-  const currentDayOfWeek=now.getDay();
-  const distToMon=currentDayOfWeek===0?6:currentDayOfWeek-1;
-  const mondayDate=new Date(now); mondayDate.setDate(now.getDate()-distToMon);
-  const dayNames=['Sen','Sel','Rab','Kam','Jum','Sab','Min'];
-  const weeklyDayKeys=[];
-  for(let i=0;i<7;i++){
-    const d=new Date(mondayDate); d.setDate(mondayDate.getDate()+i);
-    weeklyDayKeys.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`);
-  }
-
-  // Viewed month
-  const firstDayOfMonth=new Date(year,month,1);
-  const lastDayOfMonth=new Date(year,month+1,0);
-  const totalDaysInMonth=lastDayOfMonth.getDate();
-  const monthlyDayKeys=[];
-  for(let d=1;d<=totalDaysInMonth;d++){
-    const date=new Date(year,month,d);
-    monthlyDayKeys.push(`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`);
-  }
-
-  // Deduplicate all day keys
-  const allDayKeys=[...new Set([...historyDays,...weeklyDayKeys,...monthlyDayKeys])];
-
-  // === PARALLEL FETCH: all orders + receipts at once ===
-  const [rSnap,...orderSnaps] = await Promise.all([
-    get(ref(db,'receipts')).catch(()=>null),
-    ...allDayKeys.map(k=>get(ref(db,`orders/${k}`)).catch(()=>null))
-  ]);
-
-  // Build lookup map
-  const snapMap={};
-  allDayKeys.forEach((k,i)=>{snapMap[k]=orderSnaps[i];});
-
-  // Process receipts
-  let receiptsMap={};
-  try{
-    const rData=(rSnap&&rSnap.val())||{};
-    Object.values(rData).forEach(r=>{
-      const dKey=(r.date||'').slice(0,10);
-      if(dKey){
-        const itemsArr=Array.isArray(r.items)?r.items:(r.items?Object.values(r.items):[]);
-        const t=r.total||itemsArr.reduce((s,i)=>s+parseInt((i.price||'').replace(/\D/g,'')||0),0)||0;
-        receiptsMap[dKey]=(receiptsMap[dKey]||0)+t;
-      }
-    });
-  }catch(e){}
-
-  // 90-day historical revenues for stats
-  const historicalRevenues=[];
-  historyDays.forEach(dayKey=>{
-    const snap=snapMap[dayKey]; if(!snap) return;
-    const orders=snap.val()||{};
-    let dayRevenue=0;
-    Object.entries(orders).forEach(([k,v])=>{if(k!=='receipts')dayRevenue+=(v.total||0);});
-    historicalRevenues.push(dayRevenue);
-  });
-  const nHist=historicalRevenues.length||1;
-  const meanDailyRev=historicalRevenues.reduce((s,r)=>s+r,0)/nHist;
-  const varRev=historicalRevenues.reduce((s,r)=>s+Math.pow(r-meanDailyRev,2),0)/nHist;
-  const stdDevRev=Math.sqrt(varRev);
-  const z=1.96;
-  const optDailyRev=meanDailyRev+(z*stdDevRev);
-  const consDailyRev=Math.max(0,meanDailyRev-(z*stdDevRev));
-
-  // Weekly calendar + item aggregation
-  const weeklyCalendar=[];
-  const weeklyItemMap={};
-  weeklyDayKeys.forEach((dateKey,i)=>{
-    const isPastOrToday=dateKey<=todayStr;
-    let dayRev=0,dayExp=0,dayTx=0;
-    if(isPastOrToday){
-      const orders=(snapMap[dateKey]&&snapMap[dateKey].val())||{};
-      Object.entries(orders).forEach(([k,v])=>{if(k!=='receipts'){dayRev+=(v.total||0);dayTx++;}});
-      _aggregateItems(orders,weeklyItemMap,all);
-      dayExp=receiptsMap[dateKey]||0;
-    }
-    const d=new Date(mondayDate); d.setDate(mondayDate.getDate()+i);
-    weeklyCalendar.push({dateKey,dayName:dayNames[i],label:`${dayNames[i]} ${d.getDate()}`,revenue:isPastOrToday?dayRev:null,expenses:isPastOrToday?dayExp:null,txCount:isPastOrToday?dayTx:null,isFuture:!isPastOrToday,isToday:dateKey===todayStr});
-  });
-
-  // Monthly calendar + item aggregation
-  const monthlyCalendar=[];
-  const monthlyItemMap={};
-  let cumActualRev=0;
-  monthlyDayKeys.forEach((dateKey,idx)=>{
-    const dayNum=idx+1;
-    const isPastOrToday=dateKey<=todayStr;
-    let dayRev=0,dayExp=0;
-    if(isPastOrToday){
-      const orders=(snapMap[dateKey]&&snapMap[dateKey].val())||{};
-      Object.entries(orders).forEach(([k,v])=>{if(k!=='receipts')dayRev+=(v.total||0);});
-      _aggregateItems(orders,monthlyItemMap,all);
-      dayExp=receiptsMap[dateKey]||0;
-      cumActualRev+=dayRev;
-    }
-    monthlyCalendar.push({dayNum,dateKey,revenue:isPastOrToday?dayRev:null,expenses:isPastOrToday?dayExp:null,isPastOrToday,isToday:dateKey===todayStr});
-  });
-
-  // Today item map from in-memory dailyOrders
-  const todayItemMap={};
-  const _dailyOrders=typeof dailyOrders!=='undefined'?dailyOrders:{};
-  Object.values(_dailyOrders).forEach(tx=>{
-    if(tx.qty!==undefined) return;
-    Object.entries(tx.items||{}).forEach(([iid,idata])=>{
-      const m=all.find(x=>x.id===iid); if(!m) return;
-      const lines=typeof buildOrderLines==='function'?buildOrderLines(m,idata):[];
-      lines.forEach(line=>{
-        const key=iid+'|'+line.name;
-        if(!todayItemMap[key]) todayItemMap[key]={name:line.name,qty:0,revenue:0};
-        todayItemMap[key].qty+=line.qty||0;
-        todayItemMap[key].revenue+=(line.price||m.price||0)*(line.qty||0);
-      });
-    });
-  });
-
-  // Store globally for tab switching
-  _menuMaps={today:todayItemMap,week:weeklyItemMap,month:monthlyItemMap};
-  _menuMonthMaps[menuMonthKey(year,month)]=monthlyItemMap;
-
-  // 3-tier projections
-  const todayIndex=monthlyCalendar.findIndex(m=>m.isToday);
-  const startProjIndex=todayIndex>=0?todayIndex:totalDaysInMonth-1;
-  const startCumVal=cumActualRev;
-  let cumOpt=startCumVal,cumBase=startCumVal,cumCons=startCumVal;
-  monthlyCalendar.forEach((m,idx)=>{
-    m.cumPrediction=Math.round(meanDailyRev*m.dayNum);
-    if(idx<startProjIndex){
-      m.cumActual=monthlyCalendar.slice(0,idx+1).reduce((s,x)=>s+(x.revenue||0),0);
-      m.cumOptimistic=null;m.cumRealistic=null;m.cumLower=null;
-    } else if(idx===startProjIndex){
-      m.cumActual=startCumVal;m.cumOptimistic=startCumVal;m.cumRealistic=startCumVal;m.cumLower=startCumVal;
-    } else {
-      m.cumActual=null;
-      // For past months: project based on remaining days = 0 (show flat)
-      if(!viewingCurrentMonth && dateKey<=todayStr){
-        m.cumActual=monthlyCalendar.slice(0,idx+1).reduce((s,x)=>s+(x.revenue||0),0);
-        m.cumOptimistic=null;m.cumRealistic=null;m.cumLower=null;
-      } else {
-        cumOpt+=optDailyRev;cumBase+=meanDailyRev;cumCons+=consDailyRev;
-        m.cumOptimistic=Math.round(cumOpt);m.cumRealistic=Math.round(cumBase);m.cumLower=Math.round(cumCons);
-      }
-    }
-  });
-
-  const monthNameStr=firstDayOfMonth.toLocaleString('id',{month:'long',year:'numeric'});
-  return {weeklyCalendar,monthlyCalendar,monthNameStr,totalDaysInMonth,todayDayNum:now.getDate(),meanDailyRev:Math.round(meanDailyRev),optDailyRev:Math.round(optDailyRev),consDailyRev:Math.round(consDailyRev),projMonthEndOptimistic:Math.round(cumOpt),projMonthEndRealistic:Math.round(cumBase),projMonthEndLower:Math.round(cumCons),cumActualSoFar:startCumVal,todayStr,viewYear:year,viewMonth:month};
-}
-
 // Navigate graph by month offset
 function navigateAnalysisMonth(offset){
   const now=new Date();
@@ -606,14 +421,15 @@ function showAnalysisLoading(){
   el.style.display='block';
 }
 
-async function runAnalysis(){
+async function runAnalysis(options){
   if(analysisLoading) return;
+  const force=options?.force===true;
   analysisLoading=true;
   const btn=document.getElementById('groqAnalyzeBtn');
   if(btn){btn.textContent='Memuat...';btn.disabled=true;}
   showAnalysisLoading();
   try{
-    const data=await gatherAnalysisData(_viewYear,_viewMonth);
+    const data=await gatherAnalysisData(_viewYear,_viewMonth,{force});
     showAnalysisResult(data);
   }catch(e){
     console.error('Analysis failed',e);
@@ -626,6 +442,7 @@ async function runAnalysis(){
 }
 
 function ensureGroqBtn(){
+  let created=false;
   const head=document.querySelector('.analysis-head');
   if(!head) return;
   if(!document.getElementById('groqAnalyzeBtn')){
@@ -634,38 +451,101 @@ function ensureGroqBtn(){
     btn.className='analysis-action';
     btn.style.cssText='background:linear-gradient(135deg,rgba(212,168,83,0.25),rgba(212,168,83,0.08));border:1px solid rgba(212,168,83,0.45);color:var(--gold,#c9a84c);box-shadow:0 4px 16px rgba(0,0,0,0.35);font-weight:600;transition:all 0.2s';
     btn.textContent='🔄 Refresh Analisis';
-    btn.addEventListener('click',runAnalysis);
+    btn.addEventListener('click',()=>runAnalysis({force:true}));
     head.querySelector('div')?.insertAdjacentElement('afterend',btn);
+    created=true;
   }
-  runAnalysis();
+  if(created)runAnalysis();
 }
 
-// Read-only normalized historical dataset. Forecasts and insights use this single source.
+// Normalized history is cached by viewed month. Realtime updates only refresh today in memory.
+var _analyticsHistoryCache=Object.create(null);
+var _analyticsHistoryInFlight=Object.create(null);
+
 function _analyticsDateKey(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;}
 function _analyticsMoney(v){const n=typeof v==='number'?v:parseInt(String(v||'').replace(/\D/g,''),10);return Number.isFinite(n)&&n>=0?n:0;}
-function _analyticsReceiptTotals(data){const out={};Object.values(data||{}).forEach(r=>{const k=String(r?.date||'').slice(0,10);if(!/^\d{4}-\d{2}-\d{2}$/.test(k))return;const xs=Array.isArray(r.items)?r.items:(r.items?Object.values(r.items):[]);const total=_analyticsMoney(r.total)||xs.reduce((s,i)=>s+_analyticsMoney(i?.price),0);out[k]=(out[k]||0)+total;});return out;}
+function _analyticsMenuMap(all){const map=Object.create(null);(all||[]).forEach(item=>{if(item?.id)map[item.id]=item;});return map;}
+function _analyticsReceiptTotals(data){const out={};Object.values(data||{}).forEach(r=>{const k=String(r?.date||'').slice(0,10);if(!/^\d{4}-\d{2}-\d{2}$/.test(k))return;const xs=Array.isArray(r.items)?r.items:(r.items?Object.values(r.items):[]);const total=_analyticsMoney(r.total)||xs.reduce((sum,item)=>sum+_analyticsMoney(item?.price),0);out[k]=(out[k]||0)+total;});return out;}
 function _analyticsValidTx(tx){return !!(tx&&typeof tx==='object'&&tx.items&&typeof tx.items==='object'&&Number.isFinite(Number(tx.total))&&Number(tx.total)>=0&&tx.test!==true&&tx.isTest!==true&&String(tx.status||'').toLowerCase()!=='test');}
-function _analyticsDay(key,raw,all,expenses){const d=new Date(`${key}T12:00:00`),menuMap={};let revenue=0,txCount=0,itemQty=0;Object.entries(raw||{}).forEach(([id,tx])=>{if(id==='receipts'||!_analyticsValidTx(tx))return;revenue+=_analyticsMoney(tx.total);txCount++;Object.entries(tx.items||{}).forEach(([iid,data])=>{const m=all.find(x=>x.id===iid);if(!m)return;const lines=typeof buildOrderLines==='function'?buildOrderLines(m,data):[];lines.forEach(line=>{const qty=Math.max(0,Number(line.qty)||0);if(!qty)return;const k=iid+'|'+line.name;if(!menuMap[k])menuMap[k]={id:iid,name:line.name,qty:0,revenue:0};menuMap[k].qty+=qty;menuMap[k].revenue+=_analyticsMoney(line.price||m.price)*qty;itemQty+=qty;});});});return {dateKey:key,revenue,txCount,avgBasket:txCount?revenue/txCount:0,itemQty,menuMap,weekday:d.getDay(),dayOfMonth:d.getDate(),expenses:expenses[key]||0};}
-function _analyticsTrimmed(xs){const a=xs.filter(v=>Number.isFinite(v)&&v>=0).sort((x,y)=>x-y);if(!a.length)return 0;const t=a.length>=6?Math.floor(a.length*.15):0;const b=a.slice(t,a.length-t||undefined);return b.reduce((s,v)=>s+v,0)/(b.length||1);}
-function _analyticsPct(xs,p){const a=xs.filter(Number.isFinite).sort((x,y)=>x-y);return a.length?a[Math.floor((a.length-1)*p)]:0;}
-function _analyticsFillMissingDays(dataset,start,end,all,expenses){for(let d=new Date(start);d<=end;d.setDate(d.getDate()+1)){const key=_analyticsDateKey(d);if(!dataset[key])dataset[key]=_analyticsDay(key,{},all,expenses);}}
-async function gatherAnalysisData(viewYear,viewMonth){
-  const all=getAll(),now=new Date(),todayStr=today(),year=viewYear==null?now.getFullYear():viewYear,month=viewMonth==null?now.getMonth():viewMonth;
-  const prefix=`${year}-${String(month+1).padStart(2,'0')}`,monthStart=`${prefix}-01`,days=new Date(year,month+1,0).getDate(),historyStartDate=new Date(year,3,1),historyStart=_analyticsDateKey(historyStartDate);
-  const ordersRef=ref(db,'orders'),scopedOrders=typeof DEMO_MODE!=='undefined'&&DEMO_MODE?ordersRef:ordersRef.orderByKey().startAt(historyStart).endAt(`${prefix}-31`);
-  const ordersSnap=await get(scopedOrders).catch(()=>null),expenses=_analyticsReceiptTotals(typeof receipts!=='undefined'?receipts:{}),dataset={};
-  Object.entries(ordersSnap?.val()||{}).forEach(([k,v])=>{if(/^\d{4}-\d{2}-\d{2}$/.test(k))dataset[k]=_analyticsDay(k,v,all,expenses);});
-  Object.keys(expenses).forEach(k=>{if(!dataset[k])dataset[k]=_analyticsDay(k,{},all,expenses);});
-  _analyticsFillMissingDays(dataset,historyStartDate,new Date(`${monthStart}T12:00:00`),all,expenses);
+function _analyticsDay(key,raw,menuById,expenses){
+  const d=new Date(`${key}T12:00:00`),menuMap=Object.create(null);let revenue=0,txCount=0,itemQty=0;
+  Object.entries(raw||{}).forEach(([id,tx])=>{
+    if(id==='receipts'||!_analyticsValidTx(tx))return;
+    revenue+=_analyticsMoney(tx.total);txCount++;
+    Object.entries(tx.items||{}).forEach(([iid,data])=>{
+      const menu=menuById[iid];if(!menu)return;
+      const lines=typeof buildOrderLines==='function'?buildOrderLines(menu,data):[];
+      lines.forEach(line=>{
+        const qty=Math.max(0,Number(line.qty)||0);if(!qty)return;
+        const itemKey=iid+'|'+line.name;
+        if(!menuMap[itemKey])menuMap[itemKey]={id:iid,name:line.name,qty:0,revenue:0};
+        menuMap[itemKey].qty+=qty;menuMap[itemKey].revenue+=_analyticsMoney(line.price||menu.price)*qty;itemQty+=qty;
+      });
+    });
+  });
+  return {dateKey:key,revenue,txCount,avgBasket:txCount?revenue/txCount:0,itemQty,menuMap,weekday:d.getDay(),dayOfMonth:d.getDate(),expenses:expenses[key]||0};
+}
+function _analyticsNormalizeHistory(raw,menuById,expenses){
+  const days=Object.create(null);
+  Object.entries(raw||{}).forEach(([key,value])=>{if(/^\d{4}-\d{2}-\d{2}$/.test(key))days[key]=_analyticsDay(key,value,menuById,expenses);});
+  return days;
+}
+function _analyticsTrimmed(xs){const a=(xs||[]).filter(v=>Number.isFinite(v)&&v>=0).sort((x,y)=>x-y);if(!a.length)return 0;const trim=a.length>=6?Math.floor(a.length*.15):0;const kept=a.slice(trim,a.length-trim||undefined);return kept.reduce((sum,v)=>sum+v,0)/(kept.length||1);}
+function _analyticsPct(xs,p){const a=(xs||[]).filter(Number.isFinite).sort((x,y)=>x-y);return a.length?a[Math.floor((a.length-1)*p)]:0;}
+function _analyticsSetExpenses(cache,expenses){Object.values(cache?.days||{}).forEach(day=>{day.expenses=expenses[day.dateKey]||0;});}
+function _analyticsSyncLiveToday(cache,menuById,expenses){
+  if(!cache)return;
+  _analyticsSetExpenses(cache,expenses);
+  const todayKey=today();
+  if(typeof dailyOrders!=='undefined'&&String(curDate)===todayKey)cache.days[todayKey]=_analyticsDay(todayKey,dailyOrders,menuById,expenses);
+}
+function _analyticsHistoryKey(year,month){
+  const prefix=`${year}-${String(month+1).padStart(2,'0')}`;
+  const historyStart=_analyticsDateKey(new Date(year,3,1));
+  return {prefix,historyStart,cacheKey:historyStart+'|'+prefix};
+}
+function _analyticsFillMissingDays(dataset,start,end,menuById,expenses){for(const d=new Date(start);d<=end;d.setDate(d.getDate()+1)){const key=_analyticsDateKey(d);if(!dataset[key])dataset[key]=_analyticsDay(key,{},menuById,expenses);}}
+async function _analyticsLoadHistory(cacheKey,scopedOrders,menuById,expenses,force){
+  if(!force&&_analyticsHistoryCache[cacheKey])return _analyticsHistoryCache[cacheKey];
+  if(!force&&_analyticsHistoryInFlight[cacheKey])return _analyticsHistoryInFlight[cacheKey];
+  const request=get(scopedOrders).then(snapshot=>{
+    const cache={days:_analyticsNormalizeHistory(snapshot?.val()||{},menuById,expenses),loadedAt:Date.now()};
+    _analyticsHistoryCache[cacheKey]=cache;return cache;
+  }).catch(error=>{
+    if(_analyticsHistoryCache[cacheKey])return _analyticsHistoryCache[cacheKey];
+    throw error;
+  });
+  if(!force){
+    _analyticsHistoryInFlight[cacheKey]=request;
+    request.finally(()=>{if(_analyticsHistoryInFlight[cacheKey]===request)delete _analyticsHistoryInFlight[cacheKey];});
+  }
+  return request;
+}
+function syncAnalyticsTodayCache(){
+  const now=new Date(),keyData=_analyticsHistoryKey(now.getFullYear(),now.getMonth()),cache=_analyticsHistoryCache[keyData.cacheKey];
+  if(!cache)return;
+  const menuById=_analyticsMenuMap(typeof getAll==='function'?getAll():[]),expenses=_analyticsReceiptTotals(typeof receipts!=='undefined'?receipts:{});
+  _analyticsSyncLiveToday(cache,menuById,expenses);
+}
+async function gatherAnalysisData(viewYear,viewMonth,options){
+  const force=options?.force===true,all=typeof getAll==='function'?getAll():[],menuById=_analyticsMenuMap(all),now=new Date(),todayStr=today();
+  const year=viewYear==null?now.getFullYear():viewYear,month=viewMonth==null?now.getMonth():viewMonth,keyData=_analyticsHistoryKey(year,month),monthStart=`${keyData.prefix}-01`,days=new Date(year,month+1,0).getDate(),historyStartDate=new Date(year,3,1);
+  const ordersRef=ref(db,'orders'),scopedOrders=typeof DEMO_MODE!=='undefined'&&DEMO_MODE?ordersRef:ordersRef.orderByKey().startAt(keyData.historyStart).endAt(`${keyData.prefix}-31`);
+  const expenses=_analyticsReceiptTotals(typeof receipts!=='undefined'?receipts:{}),cache=await _analyticsLoadHistory(keyData.cacheKey,scopedOrders,menuById,expenses,force);
+  _analyticsSyncLiveToday(cache,menuById,expenses);
+  const dataset=Object.assign(Object.create(null),cache.days);
+  Object.keys(expenses).forEach(key=>{if(!dataset[key])dataset[key]=_analyticsDay(key,{},menuById,expenses);});
+  _analyticsFillMissingDays(dataset,historyStartDate,new Date(`${monthStart}T12:00:00`),menuById,expenses);
+
   // Do not let unrecorded calendar days dilute the operating baseline.
-  const prior=Object.values(dataset).filter(d=>d.dateKey<monthStart&&d.txCount>0),byWeek={},byDay={},months={};
-  prior.forEach(d=>{(byWeek[d.weekday]??=[]).push(d.revenue);(byDay[d.dayOfMonth]??=[]).push(d.revenue);(months[d.dateKey.slice(0,7)]??=[]).push(d);});
-  const daily=prior.map(d=>d.revenue),base=_analyticsTrimmed(daily),low=_analyticsPct(daily,.2)||base;
+  const prior=Object.values(dataset).filter(day=>day.dateKey<monthStart&&day.txCount>0),byWeek={},byDay={},months={};
+  prior.forEach(day=>{(byWeek[day.weekday]??=[]).push(day.revenue);(byDay[day.dayOfMonth]??=[]).push(day.revenue);(months[day.dateKey.slice(0,7)]??=[]).push(day);});
+  const daily=prior.map(day=>day.revenue),base=_analyticsTrimmed(daily),low=_analyticsPct(daily,.2)||base;
   const monthHistory=Object.entries(months).sort((a,b)=>a[0].localeCompare(b[0])).map(([key,rows])=>({key,total:rows.reduce((sum,row)=>sum+row.revenue,0),days:rows.length}));
-  const completedMonths=monthHistory.filter(({key,days})=>days>=new Date(Number(key.slice(0,4)),Number(key.slice(5,7)),0).getDate()*.8).map(row=>row.total);
+  const completedMonths=monthHistory.filter(({key,days:activeDays})=>activeDays>=new Date(Number(key.slice(0,4)),Number(key.slice(5,7)),0).getDate()*.8).map(row=>row.total);
   const growths=[];for(let i=1;i<completedMonths.length;i++)if(completedMonths[i-1]>0)growths.push(completedMonths[i]/completedMonths[i-1]-1);
-  const rawGrowth=Math.max(-.1,Math.min(.18,_analyticsTrimmed(growths)||0)),growth=Math.max(0,rawGrowth);
-  const isCurrent=prefix===todayStr.slice(0,7),analysisDateKey=isCurrent?todayStr:`${prefix}-${String(days).padStart(2,'0')}`,monthlyCalendar=[];let actual=0,real=0,opt=0,cons=0,realToDate=0;
+  const rawGrowth=Math.max(-.1,Math.min(.18,_analyticsTrimmed(growths)||0)),growth=Math.max(0,rawGrowth),isCurrent=keyData.prefix===todayStr.slice(0,7),analysisDateKey=isCurrent?todayStr:`${keyData.prefix}-${String(days).padStart(2,'0')}`,monthlyCalendar=[];
+  let actual=0,real=0,opt=0,cons=0,realToDate=0;
   for(let day=1;day<=days;day++){
     const key=_analyticsDateKey(new Date(year,month,day)),row=dataset[key],observed=key<=analysisDateKey,wd=new Date(`${key}T12:00:00`).getDay();
     const weekdayBase=_analyticsTrimmed(byWeek[wd]||[])||base,calendarBase=_analyticsTrimmed(byDay[day]||[])||base,normal=weekdayBase*.7+calendarBase*.3;
@@ -675,12 +555,12 @@ async function gatherAnalysisData(viewYear,viewMonth){
     monthlyCalendar.push({dayNum:day,dateKey:key,revenue:observed?(row?.revenue||0):null,expenses:observed?(row?.expenses||0):null,isPastOrToday:observed,isToday:key===analysisDateKey,cumActual:observed?actual:null,cumRealistic:Math.round(real),cumOptimistic:Math.round(opt),cumLower:Math.round(cons),cumPrediction:Math.round(real)});
   }
   const monday=new Date(now);monday.setDate(now.getDate()-(now.getDay()===0?6:now.getDay()-1));const names=['Sen','Sel','Rab','Kam','Jum','Sab','Min'],weeklyCalendar=[];
-  for(let i=0;i<7;i++){const d=new Date(monday);d.setDate(monday.getDate()+i);const k=_analyticsDateKey(d),row=dataset[k],future=k>todayStr;weeklyCalendar.push({dateKey:k,dayName:names[i],label:`${names[i]} ${d.getDate()}`,revenue:future?null:(row?.revenue||0),expenses:future?null:(row?.expenses||0),txCount:future?null:(row?.txCount||0),isFuture:future,isToday:k===todayStr});}
-  const merge=(rows)=>{const out={};rows.forEach(d=>Object.values(dataset[d.dateKey]?.menuMap||{}).forEach(i=>{const k=i.id+'|'+i.name;(out[k]??={id:i.id,name:i.name,qty:0,revenue:0});out[k].qty+=i.qty;out[k].revenue+=i.revenue;}));return out;};
-  const monthRows=monthlyCalendar.filter(d=>d.isPastOrToday),todayRow=dataset[analysisDateKey]||_analyticsDay(analysisDateKey,{},all,expenses);_analyticsDataset=dataset;_menuMaps={today:todayRow.menuMap||{},week:merge(weeklyCalendar),month:merge(monthRows)};_menuMonthMaps[menuMonthKey(year,month)]=_menuMaps.month;
+  for(let i=0;i<7;i++){const d=new Date(monday);d.setDate(monday.getDate()+i);const key=_analyticsDateKey(d),row=dataset[key],future=key>todayStr;weeklyCalendar.push({dateKey:key,dayName:names[i],label:`${names[i]} ${d.getDate()}`,revenue:future?null:(row?.revenue||0),expenses:future?null:(row?.expenses||0),txCount:future?null:(row?.txCount||0),isFuture:future,isToday:key===todayStr});}
+  const merge=rows=>{const out={};rows.forEach(row=>Object.values(dataset[row.dateKey]?.menuMap||{}).forEach(item=>{const key=item.id+'|'+item.name;(out[key]??={id:item.id,name:item.name,qty:0,revenue:0});out[key].qty+=item.qty;out[key].revenue+=item.revenue;}));return out;};
+  const monthRows=monthlyCalendar.filter(row=>row.isPastOrToday),todayRow=dataset[analysisDateKey]||_analyticsDay(analysisDateKey,{},menuById,expenses);
+  _analyticsDataset=dataset;_menuMaps={today:todayRow.menuMap||{},week:merge(weeklyCalendar),month:merge(monthRows)};_menuMonthMaps[menuMonthKey(year,month)]=_menuMaps.month;
   return {dataset,weeklyCalendar,monthlyCalendar,monthNameStr:new Date(year,month,1).toLocaleString('id',{month:'long',year:'numeric'}),totalDaysInMonth:days,todayDayNum:isCurrent?now.getDate():days,meanDailyRev:Math.round(base),projMonthEndOptimistic:Math.round(opt),projMonthEndRealistic:Math.round(real),projMonthEndLower:Math.round(cons),cumActualSoFar:actual,realisticToDate:Math.round(realToDate),todayStr,viewYear:year,viewMonth:month,analysisDateKey,confidence:prior.length>=60?'Tinggi':prior.length>=20?'Sedang':'Data masih terbatas',historyDays:prior,normalDaily:base,growth,actualDay:todayRow,weekdayPattern:byWeek,monthHistory};
 }
-
 function buildOperationalInsightHTML(data){const d=data.actualDay||{},normal=data.normalDaily||0,diff=(d.revenue||0)-normal,pct=normal?Math.round(diff/normal*100):0;const state=!d.txCount?'Data belum cukup':pct>=8?'Diatas normal':pct<=-8?'Dibawah normal':'Normal';const avgNormal=data.historyDays?.length?_analyticsTrimmed(data.historyDays.map(x=>x.avgBasket)):0;const basketDiff=(d.avgBasket||0)-avgNormal;const top=Object.values(d.menuMap||{}).sort((a,b)=>b.revenue-a.revenue)[0],label=data.analysisDateKey===today()?'Hari ini':`Hari ${String(data.analysisDateKey||'').slice(-2)}`;return `<div style="padding:12px 14px;border:1px solid rgba(212,168,83,.2);border-radius:12px;background:rgba(212,168,83,.06);margin-bottom:12px"><div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--gold)">${label} dibanding pola normal</div><div style="margin-top:5px;font-weight:700;color:var(--text)">${state}${d.txCount?` · ${diff>=0?'+':''}${rp(diff)} (${pct>=0?'+':''}${pct}%)`:''}</div><div style="font-size:11px;color:var(--muted2);margin-top:3px">Rata-rata basket ${d.txCount?rp(d.avgBasket):'Rp 0'} vs normal ${avgNormal?rp(avgNormal):'belum cukup data'}${avgNormal&&basketDiff?` (${basketDiff>=0?'+':''}${rp(basketDiff)})`:''}${top?` · Pengaruh terbesar: ${esc(top.name)}`:''}</div></div>`;}
 function buildWeeklyInsightHTML(data){const rows=(data.weeklyCalendar||[]).filter(x=>!x.isFuture),by={};rows.forEach(x=>(by[x.dayName]??=[]).push(x.revenue||0));const ranked=Object.entries(by).map(([k,v])=>[k,_analyticsTrimmed(v)]).sort((a,b)=>b[1]-a[1]);const normal=data.normalDaily||0;const thisWeek=rows.reduce((s,x)=>s+(x.revenue||0),0),normalWeek=normal*7;return `<div style="font-size:11px;color:var(--muted2);margin:-12px 0 18px;padding:0 4px">${ranked.length?`Terkuat ${ranked[0][0]}, terlemah ${ranked[ranked.length-1][0]}`:'Data belum cukup'}${rows.length?` · Minggu ini ${thisWeek>=normalWeek?'+':''}${Math.round((thisWeek-normalWeek)/(normalWeek||1)*100)}% vs pola hari kerja normal`:''}</div>`;}
 function buildForecastMethodHTML(data){const history=(data.monthHistory||[]).filter(x=>x.key!==data.monthNameStr);const labels=history.map(x=>{const [y,m]=x.key.split('-');return new Date(Number(y),Number(m)-1,1).toLocaleString('id',{month:'short'})}).join(' · ');const actual=data.cumActualSoFar||0,ref=data.realisticToDate||0,pct=ref?Math.round((actual-ref)/ref*100):0;return `<div class="analysis-method-card"><div class="analysis-kicker">Cara membaca prediksi</div><div class="analysis-method-grid"><div><strong>${history.length||0} bulan</strong><span>riwayat terpakai${labels?` (${labels})`:''}</span></div><div><strong>${data.historyDays?.length||0} hari</strong><span>hari transaksi valid</span></div><div><strong>${rp(data.meanDailyRev||0)}</strong><span>rata-rata hari aktif</span></div><div><strong>${actual?`${pct>=0?'+':''}${pct}%`: '—'}</strong><span>aktual vs realistis saat ini</span></div></div><details><summary>Kenapa angka ini?</summary><p>Referensi memakai pola weekday, pola tanggal dalam bulan, trimmed average, dan tren pertumbuhan dari bulan sebelumnya. Hari tanpa transaksi tidak dimasukkan ke rata-rata operasional.</p></details></div>`;}

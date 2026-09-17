@@ -23,6 +23,7 @@ function loadState() {
       priceOverrides: {},
       orders: {},
       tableOrders: {},
+      tableLocks: {},
       stock: {},
       receipts: {}
     };

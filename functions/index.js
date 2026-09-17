@@ -6,7 +6,8 @@ const crypto = require("crypto");
 if (!admin.apps.length) admin.initializeApp();
 const db = admin.database();
 
-const TABLE_IDS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10"];
+const TABLE_IDS = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", 
+                   "11", "12", "13", "14", "15", "16", "17", "18", "19", "20"];
 const NASI_PRICE = 5000;
 const NASI_IDS = new Set(["beef_yakiniku", "tongseng_sapi", "ayam_kremes_lmg", "ayam_kremes_ijo", "ayam_geprek", "ayam_bakar", "lele_kremes_lmg", "lele_kremes_ijo", "nila_kremes_lmg", "nila_kremes_ijo", "soto_padang", "udang_saus"]);
 const DEF_FAVORITES = [

@@ -1,29 +1,22 @@
-if('serviceWorker' in navigator){
-  const swCode = `const CACHE = 'mula-v129';
-const ASSETS = ['/', '/index.html', '/assets/css/mula.css', '/assets/js/01-platform.js', '/assets/js/02-menu-data.js', '/assets/js/03-app-state.js', '/assets/js/04-dashboard.js', '/assets/js/05-printing.js', '/assets/js/06-checkout.js', '/assets/js/07-guest-view.js', '/assets/js/08-ai-analysis.js', '/assets/js/mula-sw-register.js'];
-self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
-});
-self.addEventListener('activate', e => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()));
-});
-self.addEventListener('fetch', e => {
-  if (e.request.url.includes('firebasedatabase.app') || e.request.url.includes('firebaseio.com') || e.request.url.includes('gstatic.com')) return;
-  e.respondWith(caches.match(e.request).then(cached => {
-    const network = fetch(e.request).then(res => {
-      if (res.ok && e.request.method === 'GET') { const clone = res.clone(); caches.open(CACHE).then(c => c.put(e.request, clone)); }
-      return res;
-    }).catch(() => cached);
-    return cached || network;
-  }));
-});`;
-  const blob = new Blob([swCode], {type:'text/javascript'});
-  const url = URL.createObjectURL(blob);
-  navigator.serviceWorker.register(url).catch(()=>{});
+// Keep the app current. Older releases registered a Blob service worker that
+// cached unversioned HTML and JavaScript, which could leave the cashier UI
+// stuck on an old modal even after a deployment.
+const CACHE = 'mula-v183';
+
+if ('serviceWorker' in navigator) {
+  (async function () {
+    try {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map(registration => registration.unregister()));
+
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.filter(key => key.indexOf('mula-') === 0).map(key => caches.delete(key)));
+      }
+
+      await navigator.serviceWorker.register('/mula-sw.js?v=183', { scope: '/' });
+    } catch (error) {
+      // The app remains usable when service workers are unavailable.
+    }
+  })();
 }
-
-
-
-
-
-

@@ -89,6 +89,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun hardReload() {
+        // Reload paksa must genuinely bypass the WebView HTTP cache. It does not
+        // clear local storage, so Firebase login and offline data remain.
+        binding.webView.clearCache(true)
         binding.webView.loadUrl(cacheBustedUrl())
     }
 
@@ -214,10 +217,9 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val PREF_URL = "cashier_url"
         private const val DEFAULT_URL = "https://mula-eatery.web.app/"
-        private const val APP_WEB_VERSION = 129
+        private const val APP_WEB_VERSION = 183
     }
 }
-
 
 
 

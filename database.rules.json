@@ -1,40 +1,41 @@
 {
   "rules": {
-    "customMenu": {
-      ".read": true,
-      ".write": "auth != null && auth.token.firebase.sign_in_provider == 'password'"
-    },
-    "customMenuComps": {
-      ".read": true,
-      ".write": "auth != null && auth.token.firebase.sign_in_provider == 'password'"
-    },
-    "priceOverrides": {
-      ".read": true,
-      ".write": "auth != null && auth.token.firebase.sign_in_provider == 'password'"
-    },
+    "customMenu": { ".read": true, ".write": "auth != null && (auth.token.mula_role == 'admin' || auth.token.email == 'admin@mula.com')" },
+    "menuDeletions": { ".read": true, ".write": "auth != null && (auth.token.mula_role == 'admin' || auth.token.email == 'admin@mula.com')" },
+    "menuAvailability": { ".read": true, "$itemId": { ".write": "auth != null && auth.token.firebase.sign_in_provider == 'password' && newData.isBoolean()" } },
+    "menuAvailabilityMeta": { ".read": true, "resetDate": { ".write": "auth != null && auth.token.firebase.sign_in_provider == 'password' && newData.isString()" } },
+    "customMenuComps": { ".read": true, ".write": "auth != null && (auth.token.mula_role == 'admin' || auth.token.email == 'admin@mula.com')" },
+    "priceOverrides": { ".read": true, ".write": "auth != null && (auth.token.mula_role == 'admin' || auth.token.email == 'admin@mula.com')" },
     "orders": {
-      ".read": "auth != null",
-      ".write": "auth != null"
+      ".read": "auth != null && (auth.token.mula_role == 'admin' || auth.token.email == 'admin@mula.com')",
+      "$date": {
+        "$transactionId": {
+          ".write": "(auth != null && (auth.token.mula_role == 'admin' || auth.token.email == 'admin@mula.com')) || (auth != null && auth.token.firebase.sign_in_provider == 'password' && !data.exists() && newData.exists() && newData.child('createdBy').val() === auth.uid && newData.child('createdAt').isNumber() && newData.child('createdAt').val() >= now - 300000 && newData.child('createdAt').val() <= now + 300000 && newData.child('items').hasChildren() && newData.child('total').isNumber() && newData.child('total').val() >= 0)"
+        }
+      }
     },
     "tableOrders": {
-      ".read": true,
-      ".write": true
+      ".read": "auth != null && auth.token.firebase.sign_in_provider == 'password'",
+      ".indexOn": ["status"],
+      "$orderId": {
+        ".write": "(auth != null && auth.token.firebase.sign_in_provider == 'password') || (!data.exists() && auth != null && auth.token.firebase.sign_in_provider == 'anonymous' && newData.child('guestUid').val() === auth.uid && newData.child('orderId').val() === $orderId && newData.child('primaryTableId').val() === newData.child('tableId').val() && newData.child('status').val() === 'waiting_verification' && newData.child('items').hasChildren() && newData.child('tableIds').hasChildren() && newData.child('total').isNumber() && newData.child('total').val() >= 0 && (newData.child('primaryTableId').val() === '1' || newData.child('primaryTableId').val() === '2' || newData.child('primaryTableId').val() === '3' || newData.child('primaryTableId').val() === '4' || newData.child('primaryTableId').val() === '5' || newData.child('primaryTableId').val() === '6' || newData.child('primaryTableId').val() === '7' || newData.child('primaryTableId').val() === '21' || newData.child('primaryTableId').val() === '22' || newData.child('primaryTableId').val() === '23' || newData.child('primaryTableId').val() === '24' || newData.child('primaryTableId').val() === '25' || newData.child('primaryTableId').val() === '26' || newData.child('primaryTableId').val() === '27' || newData.child('primaryTableId').val() === '28') && root.child('tableBlocks').child(newData.child('primaryTableId').val()).child('blocked').val() != true)"
+      }
     },
-    "kitchenHistory": {
-      ".read": "auth != null",
-      ".write": "auth != null"
-    },
-    "guestSessions": {
+    "tableBlocks": {
       ".read": true,
-      ".write": "auth != null"
-    },
-    "receipts": {
+      "$tableId": {
+        ".write": "auth != null && auth.token.firebase.sign_in_provider == 'password'"
+      }
+    },    "guestTableReservations": {
       ".read": true,
-      ".write": "auth != null && auth.token.firebase.sign_in_provider == 'password'"
+      "$tableId": {
+        ".write": "(auth != null && auth.token.firebase.sign_in_provider == 'password') || (auth != null && (($tableId === '1' || $tableId === '2' || $tableId === '3' || $tableId === '4' || $tableId === '5' || $tableId === '6' || $tableId === '7' || $tableId === '21' || $tableId === '22' || $tableId === '23' || $tableId === '24' || $tableId === '25' || $tableId === '26' || $tableId === '27' || $tableId === '28') && ((!data.exists() || data.child('expiresAt').val() <= now) && newData.exists() && newData.child('ownerUid').val() === auth.uid && newData.child('status').val() === 'waiting_verification' && newData.child('expiresAt').val() > now && newData.child('expiresAt').val() <= now + 86400000 || (data.child('ownerUid').val() === auth.uid && !newData.exists()))))"
+      }
     },
-    "stock": {
-      ".read": true,
-      ".write": "auth != null && auth.token.firebase.sign_in_provider == 'password'"
-    }
+    "kitchenHistory": { ".read": "auth != null && auth.token.firebase.sign_in_provider == 'password'", ".write": "auth != null && auth.token.firebase.sign_in_provider == 'password'" },
+    "guestSessions": { ".read": "auth != null && auth.token.firebase.sign_in_provider == 'password'", ".write": "auth != null && auth.token.firebase.sign_in_provider == 'password'" },
+    "receipts": { ".read": "auth != null && (auth.token.mula_role == 'admin' || auth.token.email == 'admin@mula.com')", ".write": "auth != null && (auth.token.mula_role == 'admin' || auth.token.email == 'admin@mula.com')" },
+    "receiptsImages": { ".read": "auth != null && (auth.token.mula_role == 'admin' || auth.token.email == 'admin@mula.com')", ".write": "auth != null && (auth.token.mula_role == 'admin' || auth.token.email == 'admin@mula.com')" },
+    "stock": { ".read": true, ".write": "auth != null && (auth.token.mula_role == 'admin' || auth.token.email == 'admin@mula.com')" }
   }
 }

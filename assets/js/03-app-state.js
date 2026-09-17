@@ -1,12 +1,15 @@
 // Shared state, auth, tabs, Firebase subscriptions, stock/receipt helpers
-var role=null,curDate=today(),orders={},stock={},receipts={},customMenu={},prices={},customMenuComps={},menuAvailability={},pendingNewRows=[],selFile=null,syncT=null,editPriceId=null,isManageMode=false;
-var unsubOrders=null,unsubStock=null,unsubReceipts=null,unsubCustom=null,unsubPrices=null,unsubCustomComps=null,unsubMenuAvailability=null;
+var role=null,curDate=today(),orders={},stock={},receipts={},customMenu={},prices={},customMenuComps={},menuAvailability={},menuDeletions={},pendingNewRows=[],selFile=null,syncT=null,editPriceId=null,isManageMode=false;
+var guestTableReservations={},tableBlocks={},unsubGuestTableReservations=null,unsubTableBlocks=null,staffLoginRole=null,staffLoginInProgress=false;
+var unsubOrders=null,unsubStock=null,unsubReceipts=null,unsubCustom=null,unsubPrices=null,unsubCustomComps=null,unsubMenuAvailability=null,unsubMenuDeletions=null;
+var menuAvailabilityResetInFlight=null,lastMenuAvailabilityResetDate='';
 var curTable=null,tableOrders={},dailyOrders={},unsubTableOrder=null,unsubAllTables=null;
-var liveTableSlices={active:{},waiting:{},paid:{},pending:{}};
+var liveTableSlices={active:{},waiting:{},paid:{},pending:{},served:{}};
 var outboxFinKeys=new Set(),outboxDbPromise=null;
 var customReady=false,pricesReady=false,renderScheduled=false,tableRenderScheduled=false;
 var paymentAlertSeen=new Set();
 var kitchenAlertSeen=new Set(),kitchenTimerInterval=null,kitchenSoundEnabled=localStorage.getItem('mula_kitchen_sound')==='1';
+var kitchenAlertVolume=Math.max(0,Math.min(1,Number(localStorage.getItem('mula_notification_volume')||'0.85')));
 var LOCAL_DAILY_KEY='mula_local_daily_orders';
 var LOCAL_ACTIVE_KEY='mula_local_active_orders';
 var LOCAL_CACHE_KEYS={customMenu:'mula_cache_customMenu',prices:'mula_cache_prices',customMenuComps:'mula_cache_customMenuComps',menuAvailability:'mula_cache_menuAvailability',stock:'mula_cache_stock'};
@@ -15,6 +18,31 @@ function isOrderDateToday(){return curDate===today();}
 function requireTodayForOrder(){if(isOrderDateToday())return true;showToast('Pesanan hanya dapat dibuat untuk tanggal hari ini.');return false;}
 function showToast(msg,dur=2400){let t=document.getElementById('cashierToast');if(!t){t=document.createElement('div');t.id='cashierToast';t.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 20px;border-radius:8px;font-size:14px;z-index:9999;opacity:0;transition:opacity 0.3s;pointer-events:none';document.body.appendChild(t);}t.textContent=msg;t.style.opacity='1';clearTimeout(t._t);t._t=setTimeout(()=>t.style.opacity='0',dur);}
 function enableKitchenSound(){kitchenSoundEnabled=true;localStorage.setItem('mula_kitchen_sound','1');playKitchenAlert();showToast('Suara dapur aktif');renderActiveTables();}
+function ensureSettingsModal(){
+  if(document.getElementById('settingsModal'))return;
+  const modal=document.createElement('div');
+  modal.id='settingsModal';modal.className='modal-bg';
+  modal.innerHTML=`<div class="modal-box" style="max-width:390px"><h3>Pengaturan</h3><div style="margin:14px 0 18px;text-align:left"><label for="notificationVolume" style="display:block;font-size:12px;color:var(--muted2);margin-bottom:8px">Volume notifikasi <strong id="notificationVolumeValue" style="color:var(--gold)"></strong></label><input id="notificationVolume" type="range" min="0" max="100" step="5" style="width:100%"><p style="margin:7px 0 0;font-size:11px;color:var(--muted)">Berlaku untuk notifikasi pesanan baru dan pembayaran.</p></div><div class="modal-actions"><button class="btn-secondary" id="settingsClose">Tutup</button><button class="btn-secondary" id="settingsTestSound">Tes Suara</button><button class="btn-primary" id="settingsRefresh">↻ Refresh Terbaru</button></div></div>`;
+  document.body.appendChild(modal);
+  const range=document.getElementById('notificationVolume'),label=document.getElementById('notificationVolumeValue');
+  const updateVolume=()=>{kitchenAlertVolume=Math.max(0,Math.min(1,Number(range.value)/100));localStorage.setItem('mula_notification_volume',String(kitchenAlertVolume));label.textContent=Math.round(kitchenAlertVolume*100)+'%';};
+  range.value=String(Math.round(kitchenAlertVolume*100));updateVolume();
+  range.addEventListener('input',updateVolume);
+  document.getElementById('settingsClose').addEventListener('click',()=>modal.classList.remove('show'));
+  document.getElementById('settingsTestSound').addEventListener('click',()=>playKitchenAlert());
+  document.getElementById('settingsRefresh').addEventListener('click',forceLatestRefresh);
+}
+function openSettings(){ensureSettingsModal();document.getElementById('settingsModal').classList.add('show');}
+async function forceLatestRefresh(){
+  const btn=document.getElementById('settingsRefresh');if(btn){btn.disabled=true;btn.textContent='Memuat...';}
+  try{
+    if(fbDb&&typeof fbDb.goOnline==='function')fbDb.goOnline();
+    if(currentUser&&!currentUser.isAnonymous)await currentUser.getIdToken(true);
+    if('serviceWorker' in navigator){const registrations=await navigator.serviceWorker.getRegistrations();await Promise.all(registrations.map(registration=>registration.update().catch(()=>{})));await Promise.all(registrations.map(registration=>registration.unregister().catch(()=>false)));}
+    if('caches' in window){const keys=await caches.keys();await Promise.all(keys.filter(key=>key.indexOf('mula-')===0).map(key=>caches.delete(key)));}
+  }catch(error){console.warn('Refresh terbaru gagal membersihkan cache',error);}
+  location.replace(location.pathname+'?mula_refresh='+Date.now()+location.hash);
+}
 function readJsonStore(key){try{return JSON.parse(localStorage.getItem(key)||'{}');}catch(e){return{};}}
 function writeJsonStore(key,val){localStorage.setItem(key,JSON.stringify(val||{}));}
 function getLocalDailyOrders(dateKey){return readJsonStore(LOCAL_DAILY_KEY)[dateKey]||{};}
@@ -133,7 +161,7 @@ async function syncOfflineQueue(){
     try{
       if(job.type==='kitchen_done'){
         updates[`kitchenHistory/${job.dateKey}/${job.tid}`]=job.donePayload;
-        updates[`tableOrders/${job.tid}`]=null;
+        updates[`tableOrders/${job.tid}`]=job.servedPayload||null;
         syncedJobs.push(job);
       }else{
         updates[`orders/${job.dateKey}/${job.finKey}`]=job.fPayload;
@@ -168,7 +196,8 @@ async function syncOfflineQueue(){
   isSyncingQueue=false;
 }
 setInterval(syncOfflineQueue, 10000);
-function getSection(cat,def){return[...def,...Object.values(customMenu).filter(i=>i.cat===cat)].map(i=>({...i,price:prices[i.id]||i.price,outOfStock:!!menuAvailability[i.id]}));}
+setInterval(()=>{if(role)resetMenuAvailabilityForNewDay();}, 60000);
+function getSection(cat,def){return[...def.filter(i=>!menuDeletions?.[i.id]),...Object.values(customMenu).filter(i=>i.cat===cat&&!menuDeletions?.[i.id])].map(i=>({...i,price:prices[i.id]||i.price,outOfStock:!!menuAvailability[i.id]}));}
 function getFav(){return getSection('favorites',DEF_FAVORITES);}
 function getTambahan(){return getSection('tambahan',DEF_TAMBAHAN);}
 function getDrinks(){return getSection('drinks',DEF_DRINKS);}
@@ -217,24 +246,47 @@ function normalizeGuestItems(cart){const out=[];Object.entries(cart||{}).forEach
 function registerCoreEventListeners(){
   if(window.mulaCoreEventsBound)return false;
   window.mulaCoreEventsBound=true;
-document.getElementById('adminBtn').addEventListener('click',async()=>{
-  // Wait briefly for Firebase LOCAL persistence before showing a login form.
-  // A restored admin session should always use quick access.
-  if(typeof authStateReady!=='undefined'&&!currentUser){
-    await Promise.race([authStateReady,new Promise(resolve=>setTimeout(resolve,1200))]);
-  }
-  if(currentUser && !currentUser.isAnonymous){
-    // Already logged in via Firebase — go straight in
-    enterApp('admin');
-    return;
-  }
+async function resolveAuthenticatedRole(user=currentUser){
+  if(!user||user.isAnonymous)throw new Error('Sesi staf tidak ditemukan.');
+  const token=await user.getIdTokenResult(true);
+  const isConfiguredAdmin=String(user.email||'').trim().toLowerCase()==='admin@mula.com';
+  return (isConfiguredAdmin||(token.claims&&token.claims.mula_role==='admin'))?'admin':'karyawan';
+}
+function showLoginError(message){const err=document.getElementById('pwErr');if(err){err.textContent=message;err.style.display='block';}}
+function showLoginModal(requestedRole){
+  const isAdmin=requestedRole==='admin';staffLoginRole=requestedRole;
+  document.querySelector('#pwModal h3').textContent=isAdmin?'Admin Login':'Karyawan Login';
+  document.getElementById('emailInput').style.display='block';
+  document.getElementById('emailInput').placeholder=isAdmin?'Email admin':'Email karyawan';
+  document.getElementById('pwInput').placeholder='Password';
+  document.getElementById('pwErr').style.display='none';
   document.getElementById('pwModal').classList.add('show');
-  setTimeout(()=>document.getElementById('pwInput').focus(),100);
-});
-document.getElementById('karyawanBtn').addEventListener('click',()=>enterApp('karyawan'));
-document.getElementById('pwSubmit').addEventListener('click',tryLogin);
+  setTimeout(()=>document.getElementById('emailInput').focus(),100);
+}
+async function enterAuthenticatedStaff(requestedRole){
+  const actualRole=await resolveAuthenticatedRole();
+  if(requestedRole==='admin'&&actualRole!=='admin'){
+    showLoginError('Akun ini karyawan. Silakan masuk melalui tombol Karyawan.');
+    return false;
+  }
+  document.getElementById('pwModal').classList.remove('show');
+  enterApp(actualRole);return true;
+}
+async function handleRestoredStaffSession(user){
+  if(staffLoginInProgress||!user||user.isAnonymous)return;
+  try{await enterAuthenticatedStaff(null);}catch(error){console.error('Gagal memulihkan peran staf',error);}
+}
+async function requestStaffLogin(requestedRole){
+  staffLoginRole=requestedRole;
+  if(typeof authStateReady!=='undefined'&&!currentUser)await Promise.race([authStateReady,new Promise(resolve=>setTimeout(resolve,1200))]);
+  if(currentUser&&!currentUser.isAnonymous){try{await enterAuthenticatedStaff(requestedRole);}catch(error){showLoginError('Gagal memeriksa akses akun.');}return;}
+  showLoginModal(requestedRole);
+}
+document.getElementById('adminBtn').addEventListener('click',()=>requestStaffLogin('admin'));
+document.getElementById('karyawanBtn').addEventListener('click',()=>requestStaffLogin('karyawan'));document.getElementById('pwSubmit').addEventListener('click',tryLogin);
 document.getElementById('pwCancel').addEventListener('click',()=>{document.getElementById('pwModal').classList.remove('show');document.getElementById('pwErr').style.display='none';document.getElementById('pwInput').value='';});
 document.getElementById('pwInput').addEventListener('keydown',e=>{if(e.key==='Enter')tryLogin();});
+document.getElementById('settingsBtn').addEventListener('click',openSettings);
 document.getElementById('logoutBtn').addEventListener('click',async()=>{
   try{if(fbAuth&&currentUser&&!currentUser.isAnonymous)await fbAuth.signOut();}catch(e){console.warn('Logout gagal',e);}
   role=null;
@@ -254,20 +306,34 @@ if(a==='plus')update(ref(db,`stock/${id}`),{jumlah:Math.max(0,(stock[id]?.jumlah
 if(a==='minus')update(ref(db,`stock/${id}`),{jumlah:Math.max(0,(stock[id]?.jumlah||0)-1)});
 if(a==='del'&&confirm('Hapus bahan ini?'))remove(ref(db,`stock/${id}`));
 });
-document.getElementById('receiptsList').addEventListener('click',e=>{
-if(e.target.classList.contains('r-del')||e.target.closest('.r-del')){const id=e.target.closest('[data-id]')?.dataset.id;if(id&&confirm('Hapus nota ini?'))remove(ref(db,`receipts/${id}`));return;}
+document.getElementById('receiptsList').addEventListener('click',async e=>{
+if(e.target.classList.contains('r-del')||e.target.closest('.r-del')){
+  const id=e.target.closest('[data-id]')?.dataset.id;
+  if(id&&confirm('Hapus nota ini?')){
+    remove(ref(db,`receipts/${id}`)).catch(()=>{});
+    remove(ref(db,`receiptsImages/${id}`)).catch(()=>{});
+  }
+  return;
+}
 var item=e.target.closest('.receipt-item');if(!item)return;
 var id=item.dataset.id;
-// Fetch full image on demand only when tapped
-get(ref(db,`receipts/${id}`)).then(s=>{
-var r=s.val();if(!r)return;
-document.getElementById('modalImg').src=r.img||r.thumb||'';
-document.getElementById('modalNote').textContent=r.note||'';
-document.getElementById('modalDate').textContent=r.date?new Date(r.date).toLocaleString('id'):'';
+var meta=receipts[id]||{};
+document.getElementById('modalNote').textContent=meta.note||'';
+document.getElementById('modalDate').textContent=meta.date?new Date(meta.date).toLocaleString('id'):'';
+document.getElementById('modalImg').src=meta.thumb||'';
 document.getElementById('receiptModal').classList.add('show');
-});
-});
-document.querySelectorAll('.tab-btn').forEach(btn=>{btn.addEventListener('click',()=>{
+if(!meta.hasImg)return;
+try{
+  const imageSnap=await get(ref(db,`receiptsImages/${id}`));
+  const imageData=imageSnap?.val();
+  let full=typeof imageData==='string'?imageData:(imageData?.img||'');
+  if(!full){
+    const legacySnap=await get(ref(db,`receipts/${id}`));
+    full=legacySnap?.val()?.img||'';
+  }
+  if(full)document.getElementById('modalImg').src=full;
+}catch(e){console.warn('Gagal memuat gambar nota',e);}
+});document.querySelectorAll('.tab-btn').forEach(btn=>{btn.addEventListener('click',()=>{
 document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
 document.querySelectorAll('.tab-content').forEach(c=>c.classList.remove('active'));
 btn.classList.add('active');
@@ -290,38 +356,23 @@ async function tryLogin(){
   const emailInp=document.getElementById('emailInput');
   const pwInp=document.getElementById('pwInput');
   const btn=document.getElementById('pwSubmit');
-  const err=document.getElementById('pwErr');
   const pw=pwInp?pwInp.value:'';
   if(!pw)return;
-
-  // Already logged in via Firebase → just accept password as-is (they already authenticated once)
-  if(currentUser&&!currentUser.isAnonymous){
-    document.getElementById('pwModal').classList.remove('show');
-    if(pwInp)pwInp.value='';
-    enterApp('admin');
-    return;
-  }
-
-  // First time: need Firebase email+password login
-  const email=emailInp?emailInp.value.trim():'';
-  if(!email){if(err){err.textContent='Masukkan email admin';err.style.display='block';}return;}
-
   if(btn){btn.textContent='Memeriksa...';btn.disabled=true;}
-  if(err)err.style.display='none';
-
+  document.getElementById('pwErr').style.display='none';
   try{
     if(typeof authPersistenceReady!=='undefined')await authPersistenceReady;
-    await fbAuth.signInWithEmailAndPassword(email,pw);
-    document.getElementById('pwModal').classList.remove('show');
+    if(!currentUser||currentUser.isAnonymous){
+      const email=emailInp?emailInp.value.trim():'';
+      if(!email)throw new Error('Masukkan email.');
+      staffLoginInProgress=true;
+      await fbAuth.signInWithEmailAndPassword(email,pw);
+    }
     if(pwInp)pwInp.value='';
-    enterApp('admin');
-  }catch(e){
-    if(err){err.textContent='Gagal: '+e.message;err.style.display='block';}
-  }finally{
-    if(btn){btn.textContent='Masuk';btn.disabled=false;}
-  }
+    await enterAuthenticatedStaff(staffLoginRole);
+  }catch(error){showLoginError(error.message||'Gagal masuk.');}
+  finally{staffLoginInProgress=false;if(btn){btn.textContent='Masuk';btn.disabled=false;}}
 }
-
 
 function enterApp(r){
 if(role===r&&document.getElementById('app')?.style.display==='block')return;
@@ -331,49 +382,102 @@ document.getElementById('app').style.display='block';
 document.getElementById('roleBadge').textContent=r==='admin'?'Admin':'Karyawan';
 document.getElementById('roleBadge').className='role-badge '+r;
 document.getElementById('logoutBtn').style.display='block';
-document.getElementById('printBtn').style.display='block';if(r==='admin'){document.getElementById('manageToggleBtn').style.display='flex';document.getElementById('stockPanel').style.display='block';document.querySelectorAll('.admin-tab').forEach(el=>el.style.display='block');document.querySelectorAll('.admin-only').forEach(el=>el.style.display='flex');}
+document.getElementById('printBtn').style.display='block';document.getElementById('settingsBtn').style.display='block';document.getElementById('manageToggleBtn').style.display='flex';if(r==='admin'){document.getElementById('stockPanel').style.display='block';document.querySelectorAll('.admin-tab').forEach(el=>el.style.display='block');document.querySelectorAll('.admin-only').forEach(el=>el.style.display='flex');}
 document.getElementById('dateInput').value=curDate;
 document.getElementById('dateLabel').textContent=fmtDate(curDate);
 subAll();
 }
 function scheduleRender(){if(renderScheduled)return;renderScheduled=true;requestAnimationFrame(()=>{renderScheduled=false;renderOrders();});}
+async function resetMenuAvailabilityForNewDay(){
+  const dateKey=today();
+  if(lastMenuAvailabilityResetDate===dateKey)return;
+  if(menuAvailabilityResetInFlight)return menuAvailabilityResetInFlight;
+  menuAvailabilityResetInFlight=(async()=>{
+    try{
+      const meta=await get(ref(db,'menuAvailabilityMeta/resetDate'));
+      if(String(meta.val()||'')===dateKey){lastMenuAvailabilityResetDate=dateKey;return;}
+      const availabilitySnap=await get(ref(db,'menuAvailability'));
+      const remoteAvailability=availabilitySnap.val()||{};
+      const updates={'menuAvailabilityMeta/resetDate':dateKey};
+      Object.keys(remoteAvailability).forEach(id=>{updates['menuAvailability/'+id]=null;});
+      await update(ref(db),updates);
+      menuAvailability={};
+      writeLocalCache('menuAvailability',menuAvailability);
+      lastMenuAvailabilityResetDate=dateKey;
+      if(typeof scheduleRender==='function')scheduleRender();
+    }catch(error){console.warn('Gagal reset menu habis harian',error);}
+    finally{menuAvailabilityResetInFlight=null;}
+  })();
+  return menuAvailabilityResetInFlight;
+}
 function subAll(){
 customReady=false;pricesReady=false;
 if(unsubCustom)unsubCustom();if(unsubPrices)unsubPrices();
-subOrders();
+if(role==='admin'){subOrders();}else{if(unsubOrders){unsubOrders();unsubOrders=null;}dailyOrders={};}
 unsubCustom=onValue(ref(db,'customMenu'),s=>{customMenu=s.val()||{};writeLocalCache('customMenu',customMenu);customReady=true;if(pricesReady)scheduleRender();});
 unsubPrices=onValue(ref(db,'priceOverrides'),s=>{prices=s.val()||{};writeLocalCache('prices',prices);pricesReady=true;if(customReady)scheduleRender();});
 if(unsubCustomComps)unsubCustomComps();
 unsubCustomComps=onValue(ref(db,'customMenuComps'),s=>{customMenuComps=s.val()||{};writeLocalCache('customMenuComps',customMenuComps);if(customReady&&pricesReady)scheduleRender();});
 if(unsubMenuAvailability)unsubMenuAvailability();
 unsubMenuAvailability=onValue(ref(db,'menuAvailability'),s=>{menuAvailability=s.val()||{};writeLocalCache('menuAvailability',menuAvailability);if(customReady&&pricesReady)scheduleRender();});
+resetMenuAvailabilityForNewDay();
+if(unsubMenuDeletions)unsubMenuDeletions();
+unsubMenuDeletions=onValue(ref(db,'menuDeletions'),s=>{menuDeletions=s.val()||{};if(customReady&&pricesReady)scheduleRender();});
 if(unsubAllTables)unsubAllTables();
-liveTableSlices={active:{},waiting:{},paid:{},pending:{}};
+liveTableSlices={active:{},waiting:{},paid:{},pending:{},served:{}};
 const tableStatusRef=(status)=>{const r=ref(db,'tableOrders');return typeof DEMO_MODE!=='undefined'&&DEMO_MODE?r:r.orderByChild('status').equalTo(status);};
-const refreshTableSlices=()=>{tableOrders=mergedActiveOrders(Object.assign({},liveTableSlices.active,liveTableSlices.waiting,liveTableSlices.paid,liveTableSlices.pending));notifyWaitingVerification();notifyActiveKitchenOrders();if(tableRenderScheduled)return;tableRenderScheduled=true;requestAnimationFrame(()=>{tableRenderScheduled=false;renderPendingOrders();renderActiveTables();renderPendingPayments();if(customReady&&pricesReady)scheduleRender();});};
-const unsubs=[['active',tableStatusRef('active')],['waiting',tableStatusRef('waiting_verification')],['paid',tableStatusRef('paid')],['pending',tableStatusRef('pending_payment')]].map(([name,queryRef])=>onValue(queryRef,s=>{liveTableSlices[name]=s.val()||{};refreshTableSlices();}));
+const refreshTableSlices=()=>{tableOrders=mergedActiveOrders(Object.assign({},liveTableSlices.active,liveTableSlices.waiting,liveTableSlices.paid,liveTableSlices.pending,liveTableSlices.served));notifyWaitingVerification();notifyActiveKitchenOrders();if(tableRenderScheduled)return;tableRenderScheduled=true;requestAnimationFrame(()=>{tableRenderScheduled=false;renderPendingOrders();renderActiveTables();renderPendingPayments();});};
+const unsubs=[['active',tableStatusRef('active')],['waiting',tableStatusRef('waiting_verification')],['paid',tableStatusRef('paid')],['pending',tableStatusRef('pending_payment')],['served',tableStatusRef('served')]].map(([name,queryRef])=>onValue(queryRef,s=>{liveTableSlices[name]=s.val()||{};refreshTableSlices();}));
 unsubAllTables=()=>unsubs.forEach(unsub=>{try{unsub&&unsub();}catch(e){}});
+  if(unsubGuestTableReservations)unsubGuestTableReservations();
+  unsubGuestTableReservations=onValue(ref(db,'guestTableReservations'),s=>{
+    guestTableReservations=s.val()||{};
+    if(typeof renderOrders==='function')scheduleRender();
+  });
+  if(unsubTableBlocks)unsubTableBlocks();
+  unsubTableBlocks=onValue(ref(db,'tableBlocks'),s=>{tableBlocks=s.val()||{};if(typeof renderOrders==='function')scheduleRender();});
 onValue(ref(db, '.info/connected'), (snap) => {
   if (snap.val() === true) { setSync('green'); syncOfflineQueue(); } else { setSync('red'); }
 });
 }
 function subOrders(){if(unsubOrders)unsubOrders();unsubOrders=onValue(ref(db,`orders/${curDate}`),s=>{dailyOrders=mergedDailyOrders(curDate,s.val()||{});if(customReady&&pricesReady)scheduleRender();if(document.getElementById('tab-keuangan').classList.contains('active'))renderKeuangan();});}
 function subStock(){if(unsubStock)unsubStock();unsubStock=onValue(ref(db,'stock'),s=>{stock=s.val()||{};writeLocalCache('stock',stock);renderStock();});}
-function subReceipts(){
-if(unsubReceipts)unsubReceipts();
-// Only fetch metadata + thumbnail — not full image
-unsubReceipts=onValue(ref(db,'receipts'),s=>{
-var raw=s.val()||{};
-// Strip full img from memory — only keep thumb + metadata
-receipts={};
-Object.entries(raw).forEach(([id,r])=>{
-receipts[id]={note:r.note,items:r.items,total:r.total,date:r.date,by:r.by,thumb:r.thumb||null,hasImg:!!r.img||!!r.thumb};
-});
-renderReceipts();
-if(document.getElementById('tab-keuangan').classList.contains('active'))renderKeuangan();
-});
+var receiptRenderScheduled=false;
+function scheduleReceiptRefresh(){
+  if(receiptRenderScheduled)return;
+  receiptRenderScheduled=true;
+  const flush=()=>{receiptRenderScheduled=false;renderReceipts();if(document.getElementById('tab-keuangan').classList.contains('active'))renderKeuangan();};
+  if(typeof requestAnimationFrame==='function')requestAnimationFrame(flush);else setTimeout(flush,0);
 }
-function calcTotal(){let tp=0;getAll().forEach(i=>{tp+=calcOrderItemTotal(i,orders[i.id]);});return tp;}
+function receiptListEntry(raw){
+  const r=raw||{};
+  return {note:r.note,items:r.items,total:r.total,date:r.date,by:r.by,thumb:r.thumb||null,hasImg:r.hasImage===true||!!r.img};
+}
+function subReceipts(){
+  if(unsubReceipts)unsubReceipts();
+  receipts={};
+  scheduleReceiptRefresh();
+  const receiptRef=ref(db,'receipts');
+  if((typeof DEMO_MODE!=='undefined'&&DEMO_MODE)||typeof receiptRef.on!=='function'){
+    unsubReceipts=onValue(receiptRef,s=>{
+      receipts={};
+      Object.entries(s.val()||{}).forEach(([id,r])=>{receipts[id]=receiptListEntry(r);});
+      scheduleReceiptRefresh();
+    });
+    return;
+  }
+  const onAdded=s=>{receipts[s.key]=receiptListEntry(s.val());scheduleReceiptRefresh();};
+  const onChanged=s=>{receipts[s.key]=receiptListEntry(s.val());scheduleReceiptRefresh();};
+  const onRemoved=s=>{delete receipts[s.key];scheduleReceiptRefresh();};
+  receiptRef.on('child_added',onAdded);
+  receiptRef.on('child_changed',onChanged);
+  receiptRef.on('child_removed',onRemoved);
+  unsubReceipts=()=>{
+    receiptRef.off('child_added',onAdded);
+    receiptRef.off('child_changed',onChanged);
+    receiptRef.off('child_removed',onRemoved);
+  };
+}function calcTotal(){let tp=0;getAll().forEach(i=>{tp+=calcOrderItemTotal(i,orders[i.id]);});return tp;}
 function subKitchenHistory(){if(unsubKitchenHistory)unsubKitchenHistory();unsubKitchenHistory=onValue(ref(db,`kitchenHistory/${curDate}`),s=>{kitchenHistory=s.val()||{};if(document.getElementById('tab-keuangan').classList.contains('active'))renderKeuangan();});}
 function openOutboxDb(){
   if(outboxDbPromise)return outboxDbPromise;

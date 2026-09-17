@@ -1,4 +1,11 @@
 // Static menu catalog and ingredient/component definitions
+// Table name mapping - customize these names as needed
+var TABLE_NAMES = {
+  "1": "Meja 1", "2": "Meja 2", "3": "Meja 3", "4": "Meja 4", "5": "Meja 5",
+  "6": "Meja 6", "7": "Meja 7",
+  "21": "Meja 21", "22": "Meja 22", "23": "Meja 23", "24": "Meja 24",
+  "25": "Meja 25", "26": "Meja 26", "27": "Meja 27", "28": "Meja 28"
+};
 var DEF_FAVORITES=[
 {id:"es_durian_mula",name:"Es Durian Mula",price:18000},
 {id:"es_teler_mula",name:"Es Teler Mula",price:18000},
